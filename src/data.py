@@ -74,7 +74,9 @@ def build_vocab_maps(vocab_file):
     return tok_to_id, id_to_tok
 
 
-def extract_attributes(line, attribute_vocab, use_ngrams=False):
+def extract_attributes(line, corpus_vocab, attribute_vocab, use_ngrams=False):
+    corpus_vocab_binary = set([w.strip() for i, w in enumerate(open(corpus_vocab, 'rb'))])    
+    line = [w.decode('utf-8').lower() if w in corpus_vocab_binary else '<unk>' for w in line]
     if use_ngrams:
         # generate all ngrams for the sentence
         grams = []
@@ -138,9 +140,9 @@ def read_nmt_data(src, config, tgt, attribute_vocab, train_src=None, train_tgt=N
     else:
         pre_attr = post_attr = set([x.strip() for x in open(attribute_vocab)])
 
-    src_lines = [l.strip().lower().split() for l in open(src, 'r')]
+    src_lines = [l.strip().split() for l in open(src, 'rb')]
     src_lines, src_content, src_attribute = list(zip(
-        *[extract_attributes(line, pre_attr, pre_attr) for line in src_lines]
+        *[extract_attributes(line, config['data']['src_vocab'], pre_attr, pre_attr) for line in src_lines]
     ))
     src_tok2id, src_id2tok = build_vocab_maps(config['data']['src_vocab'])
     # train time: just pick attributes that are close to the current (using word distance)
@@ -160,9 +162,9 @@ def read_nmt_data(src, config, tgt, attribute_vocab, train_src=None, train_tgt=N
         'tok2id': src_tok2id, 'id2tok': src_id2tok, 'dist_measurer': src_dist_measurer
     }
 
-    tgt_lines = [l.strip().lower().split() for l in open(tgt, 'r')] if tgt else None
+    tgt_lines = [l.strip().split() for l in open(tgt, 'rb')] if tgt else None
     tgt_lines, tgt_content, tgt_attribute = list(zip(
-        *[extract_attributes(line, post_attr, post_attr) for line in tgt_lines]
+        *[extract_attributes(line, config['data']['tgt_vocab'], post_attr, post_attr) for line in tgt_lines]
     ))
     tgt_tok2id, tgt_id2tok = build_vocab_maps(config['data']['tgt_vocab'])
     # train time: just pick attributes that are close to the current (using word distance)

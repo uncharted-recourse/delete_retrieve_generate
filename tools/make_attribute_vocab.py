@@ -21,8 +21,7 @@ class SalienceCalculator(object):
         self.post_vocab = self.vectorizer.vocabulary_
         self.post_counts = np.sum(post_count_matrix, axis=0)
         self.post_counts = np.squeeze(np.asarray(self.post_counts))
-
-
+    
     def salience(self, feature, attribute='pre', lmbda=0.5):
         assert attribute in ['pre', 'post']
 
@@ -42,18 +41,17 @@ class SalienceCalculator(object):
             return (post_count + lmbda) / (pre_count + lmbda)
 
 
-vocab = set([w.strip() for i, w in enumerate(open(sys.argv[1]))])
+vocab = set([w.strip() for i, w in enumerate(open(sys.argv[1], 'rb'))])
 corpus1 = sys.argv[2]
 corpus1 = [
     w if w in vocab else '<unk>' 
-    for l in open(corpus1)
+    for l in open(corpus1, 'rb')
     for w in l.strip().split()
 ]
-
 corpus2 = sys.argv[3]
 corpus2 = [
     w if w in vocab else '<unk>' 
-    for l in open(corpus2)
+    for l in open(corpus2, 'rb')
     for w in l.strip().split()
 ]
 
@@ -63,6 +61,7 @@ sc = SalienceCalculator(corpus1, corpus2)
 
 for tok in vocab:
 #    print(tok, sc.salience(tok))
+    tok = tok.decode('utf-8')
     if max(sc.salience(tok, attribute='pre'), sc.salience(tok, attribute='post')) > r:
         print(tok)
 

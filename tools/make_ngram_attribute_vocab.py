@@ -43,16 +43,16 @@ class NgramSalienceCalculator(object):
             return (post_count + lmbda) / (pre_count + lmbda)
 
 # create a set of all words in the vocab
-vocab = set([w.strip() for i, w in enumerate(open(sys.argv[1]))])
+vocab = set([w.strip() for i, w in enumerate(open(sys.argv[1], 'rb'))])
 
 corpus1_sentences = [
     l.strip().split()
-    for l in open(sys.argv[2])
+    for l in open(sys.argv[2], 'rb')
 ]
 
 corpus2_sentences = [
     l.strip().split()
-    for l in open(sys.argv[3])
+    for l in open(sys.argv[3], 'rb')
 ]
 
 def tokenize(text):
@@ -74,7 +74,7 @@ def unk_corpus(sentences):
     for line in sentences:
         # unk the sentence according to the vocab
         line = [
-            w if w in vocab else '<unk>'
+            w.decode('utf-8') if w in vocab else '<unk>'
             for w in line
         ]
         corpus.append(' '.join(line))

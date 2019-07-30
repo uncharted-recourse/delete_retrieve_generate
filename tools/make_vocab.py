@@ -13,12 +13,12 @@ print('<s>')
 print('</s>')
 
 c = Counter()
-for l in open(sys.argv[1]):
+for l in open(sys.argv[1], 'rb'):
     for tok in l.strip().split():
         c[tok] += 1
 
 for tok, _ in c.most_common(int(sys.argv[2])):
-    print(tok)
+    print(tok.decode('utf-8'))
 
 
 

@@ -64,6 +64,7 @@ console.setFormatter(formatter)
 logging.getLogger('').addHandler(console)
 
 logging.info('Reading data ...')
+
 src, tgt = data.read_nmt_data(
     src=config['data']['src'],
     config=config,
