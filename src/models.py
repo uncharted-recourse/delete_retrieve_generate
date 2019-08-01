@@ -14,10 +14,7 @@ import src.encoders as encoders
 
 from src.cuda import CUDA
 from src import data
-from flask import Flask
-
-app = Flask(__name__)
-app.logger.debug('debug')
+from src.data import extract_attributes, build_vocab_maps, CorpusSearcher, CountVectorizer
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -37,7 +34,7 @@ def get_latest_ckpt(ckpt_dir):
     return epoch, ckpt_path
 
 
-def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None):
+def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None, map_location=None):
     assert checkpoint_dir or checkpoint_path
     if checkpoint_dir:
         epoch, checkpoint_path = get_latest_ckpt(checkpoint_dir)
@@ -45,28 +42,58 @@ def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None):
         epoch = int(checkpoint_path.split('.')[-2])
 
     if checkpoint_path:
-        model.load_state_dict(torch.load(checkpoint_path))
-        print('Load from %s sucessful!' % checkpoint_path)
+        model.load_state_dict(torch.load(checkpoint_path, map_location=map_location))
+        log('Load from %s sucessful!' % checkpoint_path, level="debug")
         return model, epoch + 1
     else:
         return model, 0
 
-def initialize_inference_model(config=None):
+def initialize_inference_model(config=None, read_binary=False):
 
-    # read data from training corpus to estalish attribute vocabulary
+    # read target data from training corpus to estalish attribute vocabulary / similarity
     log("reading training data from style corpus'", level="debug")
-    src, tgt = data.read_nmt_data(
-        src=config['data']['src'],
-        config=config,
-        tgt=config['data']['tgt'],
-        attribute_vocab=config['data']['attribute_vocab'],
-        ngram_attributes=config['data']['ngram_attributes']
+    
+    if config['data']['ngram_attributes']:
+        # read attribute vocab as a dictionary mapping attributes to scores
+        pre_attr = {}
+        post_attr = {}
+        with open(config['data']['attribute_vocab']) as attr_file:
+            next(attr_file) # skip header
+            for line in attr_file:
+                parts = line.strip().split()
+                pre_salience = float(parts[-2])
+                post_salience = float(parts[-1])
+                attr = ' '.join(parts[:-2])
+                pre_attr[attr] = pre_salience
+                post_attr[attr] = post_salience
+    else:
+        pre_attr = post_attr = set([x.strip() for x in open(config['data']['attribute_vocab'])])
+
+    if read_binary:
+        tgt_lines = [l.strip().split() for l in open(config['data']['tgt'], 'rb')] if config['data']['tgt'] else None
+    else:
+        tgt_lines = [l.strip().lower().split() for l in open(config['data']['tgt'], 'r')] if config['data']['tgt'] else None
+    tgt_lines, tgt_content, tgt_attribute = list(zip(
+        *[extract_attributes(line, config['data']['tgt_vocab'], post_attr, post_attr, read_binary) for line in tgt_lines]
+    ))
+    tgt_tok2id, tgt_id2tok = build_vocab_maps(config['data']['tgt_vocab'])
+    tgt_dist_measurer = CorpusSearcher(
+        query_corpus=[' '.join(x) for x in tgt_attribute],
+        key_corpus=[' '.join(x) for x in tgt_attribute],
+        value_corpus=[' '.join(x) for x in tgt_attribute],
+        vectorizer=CountVectorizer(vocabulary=tgt_tok2id),
+        make_binary=True
     )
+    tgt = {
+        'data': tgt_lines, 'content': tgt_content, 'attribute': tgt_attribute,
+        'tok2id': tgt_tok2id, 'id2tok': tgt_id2tok, 'dist_measurer': tgt_dist_measurer,
+        'pre_attr': pre_attr, 'post_attr': post_attr
+    }
     log("initializing model", level="debug")
     model = SeqModel(
-        src_vocab_size=len(src['tok2id']),
+        src_vocab_size=len(tgt['tok2id']),
         tgt_vocab_size=len(tgt['tok2id']),
-        pad_id_src=src['tok2id']['<pad>'],
+        pad_id_src=tgt['tok2id']['<pad>'],
         pad_id_tgt=tgt['tok2id']['<pad>'],
         config=config
     )

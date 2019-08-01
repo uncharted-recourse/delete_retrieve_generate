@@ -11,16 +11,11 @@ import editdistance
 import src.data as data
 from src.cuda import CUDA
 
-from flask import Flask
-import logging
 import time
 
 import os
 import logging
 from utils.log_func import get_log_func
-
-app = Flask(__name__)
-app.logger.debug('debug')
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -101,6 +96,23 @@ def decode_minibatch(max_len, start_id, model, src_input, srclens, srcmask,
 
     return tgt_input
 
+# convert seqs to tokens
+def ids_to_toks(tok_seqs, id2tok, sort = True):
+    out = []
+    # take off the gpu
+    tok_seqs = tok_seqs.cpu().numpy()
+    # convert to toks, cut off at </s>, delete any start tokens (preds were kickstarted w them)
+    for line in tok_seqs:
+        toks = [id2tok[x] for x in line]
+        if '<s>' in toks: 
+            toks.remove('<s>')
+        cut_idx = toks.index('</s>') if '</s>' in toks else len(toks)
+        out.append( toks[:cut_idx] )
+    # unsort
+    if sort:
+        out = data.unsort(out, indices)
+    return out
+
 def decode_dataset(model, src, tgt, config):
     """Evaluate model."""
     inputs = []
@@ -121,30 +133,12 @@ def decode_dataset(model, src, tgt, config):
         input_lines_src, output_lines_src, srclens, srcmask, indices = input_content
         input_ids_aux, _, auxlens, auxmask, _ = input_aux
         input_lines_tgt, output_lines_tgt, _, _, _ = output
-        log(f"input_lines_src: {input_lines_src}", level='debug')
 
         # TODO -- beam search
         tgt_pred = decode_minibatch(
             config['data']['max_len'], tgt['tok2id']['<s>'], 
             model, input_lines_src, srclens, srcmask,
             input_ids_aux, auxlens, auxmask)
-        log(f"target pred: {tgt_pred}", level="debug")
-
-        # convert seqs to tokens
-        def ids_to_toks(tok_seqs, id2tok):
-            out = []
-            # take off the gpu
-            tok_seqs = tok_seqs.cpu().numpy()
-            # convert to toks, cut off at </s>, delete any start tokens (preds were kickstarted w them)
-            for line in tok_seqs:
-                toks = [id2tok[x] for x in line]
-                if '<s>' in toks: 
-                    toks.remove('<s>')
-                cut_idx = toks.index('</s>') if '</s>' in toks else len(toks)
-                out.append( toks[:cut_idx] )
-            # unsort
-            out = data.unsort(out, indices)
-            return out
 
         # convert inputs/preds/targets/aux to human-readable form
         inputs += ids_to_toks(output_lines_src, src['id2tok'])
@@ -217,55 +211,62 @@ def evaluate_lpp(model, src, tgt, config):
 
     return np.mean(losses)
 
-def predict_text(text, model, tgt, config):
+def predict_text(text, model, tgt, config, read_binary=False):
 
     start_time = time.time()
+    # remove attributes from input text
+    if read_binary:
+        src_lines = [text.strip().split()]
+    else:
+        src_lines = [text.strip().lower().split()]
+    src_lines, src_content, src_attribute = list(zip(
+        *[data.extract_attributes(line, config['data']['src_vocab'], tgt['pre_attr'], tgt['pre_attr'], read_binary) for line in src_lines]
+    ))
 
-    # read test data 
-    # line = text.strip().lower().split()
-    # line, content, attribute_markers = data.extract_attributes(line, 
-    #                                                             src['pre_attr'], 
-    #                                                             src['pre_attr'])
-    # src_dist_measurer = data.CorpusSearcher(
-    #     query_corpus=[' '.join(x) for x in attribute_markers],
-    #     key_corpus=[' '.join(x) for x in attribute_markers],
-    #     value_corpus=[' '.join(x) for x in attribute_markers],
-    #     vectorizer=data.CountVectorizer(vocabulary=src['tok2id']),
-    #     make_binary=True
-    # )
-    # src_test = {
-    #     'data': [line], 'content': [content], 'attribute': [attribute_markers],
-    #     'tok2id': src['tok2id'], 'id2tok': src['id2tok'], 'dist_measurer': src_dist_measurer,
-    #     'pre_attr': src['pre_attr'], 'post_attr': src['post_attr']
-    # }
+    # convert content to tokens
+    max_len = config['data']['max_len']
+    tok2id = tgt['tok2id']
+    lines = [['<s>'] + l[:max_len] + ['</s>'] for l in src_lines]
+    content_length = [len(l) - 1 for l in lines]
+    content_mask = [([1] * l) for l in content_length]
+    content = [[tok2id.get(w, tok2id['<unk>']) for w in l[:-1]] for l in lines]
 
-    # read test data (write input to dummy file to utilize batch functions)
-    f_src = open('src.txt', 'w')
-    f_tgt = open('tgt.txt', 'w')
-    f_src.write('coal chamber, sepultura, type o negative')
-    f_tgt.write('Coal chamber, sepultura, Type O negative.')
-    f_src.close()
-    f_tgt.close()
-    start_time = time.time()
-    src_test, tgt_test = data.read_nmt_data(
-        src='src.txt',
-        config=config,
-        tgt='tgt.txt',
-        attribute_vocab=config['data']['attribute_vocab'],
-        ngram_attributes=config['data']['ngram_attributes'],
-        train_src=True,
-        train_tgt=tgt
+    # convert attributes to tokens or binary variables
+    attributes_len = None
+    attributes_mask = None
+    if config['model']['model_type'] == 'delete':
+        attributes = [1]
+    else:
+        attributes = data.sample_replace(lines, tgt['dist_measurer'], 1.0, 0)
+        attributes = [[tok2id.get(w, tok2id['<unk>']) for w in l[:-1]] for l in attributes]
+        attributes_len = [len(l) - 1 for l in attributes]
+        attributes_mask = [([1] * l) for l in attributes_len]
+        attributes_mask = Variable(torch.LongTensor(attributes_mask))
+
+
+    # convert to torch objects for prediction
+    content = Variable(torch.LongTensor(content))
+    content_mask = Variable(torch.FloatTensor(content_mask))
+    attributes = Variable(torch.LongTensor(attributes))
+
+    if CUDA:
+        content = content.cuda()
+        content_mask = content_mask.cuda()
+        attributes = attributes.cuda()
+        attributes_mask = attributes_mask.cuda()
+
+    # make predictions
+    model.eval()
+    tgt_pred = decode_minibatch(
+        max_len, tok2id['<s>'], 
+        model, content, content_length, content_mask,
+        attributes, attributes_len, attributes_mask
     )
-    os.remove('src.txt')
-    os.remove('tgt.txt')
-    log(f"reading test data took {time.time()-start_time} seconds", level='debug')
-    start_time = time.time()
-    inputs, preds, gt, auxs = decode_dataset(model, src_test, tgt_test, config)
-    log(f"inputs: {inputs}", level="debug")
-    log(f"preds: {preds}", level="debug")
-    log(f"auxs: {auxs}", level="debug")
-    log(f"decoding test data took {time.time()-start_time} seconds")
 
+    # convert tokens to text
+    preds = []
+    preds += ids_to_toks(tgt_pred, tgt['id2tok'], sort=False)
+    preds = ' '.join(preds[0])
     return preds
 
     

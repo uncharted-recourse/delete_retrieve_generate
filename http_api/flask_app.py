@@ -7,7 +7,6 @@ from flask import Flask, Markup, json, jsonify, request, render_template
 from utils.log_func import get_log_func
 from http_utils import DataEncoder, read_json, write_json
 
-import numpy as np
 import torch
 from src.evaluation import predict_text
 from src.models import initialize_inference_model, attempt_load_model
@@ -16,7 +15,6 @@ log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
 root_logger.setLevel(log_level)
 log = get_log_func(__name__)
-
 
 log("starting flask app", level="debug")
 app = Flask(__name__)
@@ -31,14 +29,9 @@ MODELS = {}
 STYLE_DICT = {}
 
 
-def get_model(style_name):
+def get_model(style_name, read_binary=False):
     if style_name in MODELS:
         log("returning preloaded model", level="debug")
-
-        # set rngs according to config
-        torch.manual_seed(MODELS[style_name]['config']['training']['random_seed'])
-        np.random.seed(MODELS[style_name]['config']['training']['random_seed'])
-
         return MODELS[style_name]
 
     log("loading new model", level="debug")
@@ -46,16 +39,13 @@ def get_model(style_name):
     model_config_fpath = f"checkpoints/{model_fname_prefix}/config.json"
     model_config = read_json(model_config_fpath)
 
-    # set rngs according to config
-    torch.manual_seed(model_config['training']['random_seed'])
-    np.random.seed(model_config['training']['random_seed'])
-
     start_time = time.time()
-    del_and_ret_model, tgt = initialize_inference_model(config=model_config)
+    del_and_ret_model, tgt = initialize_inference_model(config=model_config, read_binary = read_binary)
     log("model created", level="debug")
     del_and_ret_model, _ = attempt_load_model(
         model=del_and_ret_model,
-        checkpoint_dir=model_fname_prefix
+        checkpoint_dir=f"checkpoints/{model_fname_prefix}",
+        map_location=torch.device('cpu')
     )
     log("model weights loaded", level="debug")
     log(f"model initialization and loading took {time.time()-start_time} seconds", level="debug")
@@ -69,10 +59,16 @@ def get_model(style_name):
     return MODELS[style_name]
 
 
+#pre-load formal and romantic models
 STYLE_DICT["formal"] = "del_and_ret-formal"
 log("loading formal model", level="debug")
 get_model("formal")
 assert "formal" in MODELS
+
+STYLE_DICT["romantic"] = "del_and_ret-romantic"
+log("loading romantic model", level="debug")
+get_model("romantic", read_binary=True)
+assert "romantic" in MODELS
 
 
 @app.route("/")
@@ -81,7 +77,7 @@ def homepage():
         content = readme.read()
 
     content = Markup(markdown.markdown(content))
-    return render_template("index.pug", content=content)
+    return render_template("templates/index.pug", content=content)
 
 
 @app.route("/style-transfer", methods=["GET", "POST"])
@@ -108,7 +104,7 @@ def req_style_transfer(read_test_data=False):
         )
         log(f"prediction took {time.time()-start_time} seconds", level="debug")
 
-        out = {"output_text": pred_text[0], "style": style}
+        out = {"output_text": pred_text, "style": style}
         out.update(request.values)
         return jsonify(out)
 

@@ -19,10 +19,12 @@ COPY http_api/requirements.txt $HOME/http_api/requirements.txt
 RUN pip install -r http_api/requirements.txt
 
 # copy model, config each style
-COPY checkpoints/ $HOME/checkpoints/
+COPY checkpoints/del_and_ret-formal $HOME/checkpoints/del_and_ret-formal
+COPY checkpoints/del_and_ret-romantic $HOME/checkpoints/del_and_ret-romantic
 
 # copy vocab, attribute vocab, original text files for each style
 COPY data/gyafc/ $HOME/data/gyafc/
+COPY data/imagecaption/ $HOME/data/imagecaption/
 
 # copy everything else (excluding stuff specified in .dockerignore)
 COPY . $HOME/
