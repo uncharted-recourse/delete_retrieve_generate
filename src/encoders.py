@@ -6,6 +6,8 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from src.cuda import CUDA
 
+torch.manual_seed(1)
+
 class LSTMEncoder(nn.Module):
     """ simple wrapper for a bi-lstm """
     def __init__(self, emb_dim, hidden_dim, layers, bidirectional, dropout, pack=True):

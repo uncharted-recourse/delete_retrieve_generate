@@ -5,6 +5,9 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 
+torch.manual_seed(1)
+np.random.seed(1)
+
 class BilinearAttention(nn.Module):
     """ bilinear attention layer: score(H_j, q) = H_j^T W_a q
                 (where W_a = self.in_projection)

@@ -3,14 +3,12 @@ import os
 import time
 import markdown
 
-import numpy as np
 from flask import Flask, Markup, json, jsonify, request, render_template
 from utils.log_func import get_log_func
 from http_utils import DataEncoder, read_json, write_json
 
 from src.evaluation import predict_text
 from src.models import initialize_inference_model, attempt_load_model
-import torch
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()

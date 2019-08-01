@@ -20,6 +20,9 @@ root_logger = logging.getLogger()
 root_logger.setLevel(log_level)
 log = get_log_func(__name__)
 
+torch.manual_seed(1)
+np.random.seed(1)
+
 def get_latest_ckpt(ckpt_dir):
     ckpts = glob.glob(os.path.join(ckpt_dir, '*.ckpt'))
     # nothing to load, continue with fresh params

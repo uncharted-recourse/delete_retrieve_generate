@@ -10,6 +10,9 @@ from torch.autograd import Variable
 
 from src.cuda import CUDA
 
+torch.manual_seed(1)
+np.random.seed(1)
+
 class CorpusSearcher(object):
     def __init__(self, query_corpus, key_corpus, value_corpus, vectorizer, make_binary=True):
         self.vectorizer = vectorizer

@@ -27,6 +27,8 @@ root_logger = logging.getLogger()
 root_logger.setLevel(log_level)
 log = get_log_func(__name__)
 
+torch.manual_seed(1)
+np.random.seed(1)
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # BLEU functions from https://github.com/MaximumEntropy/Seq2Seq-PyTorch

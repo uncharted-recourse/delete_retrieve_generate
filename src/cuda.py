@@ -2,5 +2,7 @@
 
 import torch
 
+torch.manual_seed(1)
+
 CUDA = (torch.cuda.device_count() > 0)
 
