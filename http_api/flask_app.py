@@ -7,6 +7,8 @@ from flask import Flask, Markup, json, jsonify, request, render_template
 from utils.log_func import get_log_func
 from http_utils import DataEncoder, read_json, write_json
 
+import numpy as np
+import torch
 from src.evaluation import predict_text
 from src.models import initialize_inference_model, attempt_load_model
 
@@ -32,6 +34,11 @@ STYLE_DICT = {}
 def get_model(style_name):
     if style_name in MODELS:
         log("returning preloaded model", level="debug")
+
+        # set rngs according to config
+        torch.manual_seed(MODELS[style_name]['config']['training']['random_seed'])
+        np.random.seed(MODELS[style_name]['config']['training']['random_seed'])
+
         return MODELS[style_name]
 
     log("loading new model", level="debug")
@@ -39,8 +46,12 @@ def get_model(style_name):
     model_config_fpath = f"checkpoints/{model_fname_prefix}/config.json"
     model_config = read_json(model_config_fpath)
 
+    # set rngs according to config
+    torch.manual_seed(model_config['training']['random_seed'])
+    np.random.seed(model_config['training']['random_seed'])
+
     start_time = time.time()
-    del_and_ret_model, src, tgt = initialize_inference_model(config=model_config)
+    del_and_ret_model, tgt = initialize_inference_model(config=model_config)
     log("model created", level="debug")
     del_and_ret_model, _ = attempt_load_model(
         model=del_and_ret_model,
@@ -53,7 +64,6 @@ def get_model(style_name):
     MODELS[style_name] = {}
     MODELS[style_name]['model'] = del_and_ret_model
     MODELS[style_name]['config'] = model_config
-    MODELS[style_name]['src'] = src
     MODELS[style_name]['tgt'] = tgt
 
     return MODELS[style_name]
@@ -93,7 +103,6 @@ def req_style_transfer(read_test_data=False):
         log("predicting text", level="debug")
         pred_text = predict_text(text, 
             del_and_ret_model['model'], 
-            del_and_ret_model['src'],
             del_and_ret_model['tgt'],
             del_and_ret_model['config']
         )

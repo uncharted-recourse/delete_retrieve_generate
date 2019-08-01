@@ -27,8 +27,6 @@ root_logger = logging.getLogger()
 root_logger.setLevel(log_level)
 log = get_log_func(__name__)
 
-torch.manual_seed(1)
-np.random.seed(1)
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # BLEU functions from https://github.com/MaximumEntropy/Seq2Seq-PyTorch
@@ -219,7 +217,7 @@ def evaluate_lpp(model, src, tgt, config):
 
     return np.mean(losses)
 
-def predict_text(text, model, src, tgt, config):
+def predict_text(text, model, tgt, config):
 
     start_time = time.time()
 
@@ -248,13 +246,14 @@ def predict_text(text, model, src, tgt, config):
     f_tgt.write('Coal chamber, sepultura, Type O negative.')
     f_src.close()
     f_tgt.close()
+    start_time = time.time()
     src_test, tgt_test = data.read_nmt_data(
         src='src.txt',
         config=config,
         tgt='tgt.txt',
         attribute_vocab=config['data']['attribute_vocab'],
         ngram_attributes=config['data']['ngram_attributes'],
-        train_src=src,
+        train_src=True,
         train_tgt=tgt
     )
     os.remove('src.txt')

@@ -14,14 +14,15 @@ import src.encoders as encoders
 
 from src.cuda import CUDA
 from src import data
+from flask import Flask
+
+app = Flask(__name__)
+app.logger.debug('debug')
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
 root_logger.setLevel(log_level)
 log = get_log_func(__name__)
-
-torch.manual_seed(1)
-np.random.seed(1)
 
 def get_latest_ckpt(ckpt_dir):
     ckpts = glob.glob(os.path.join(ckpt_dir, '*.ckpt'))
@@ -38,7 +39,6 @@ def get_latest_ckpt(ckpt_dir):
 
 def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None):
     assert checkpoint_dir or checkpoint_path
-
     if checkpoint_dir:
         epoch, checkpoint_path = get_latest_ckpt(checkpoint_dir)
     else:
@@ -70,7 +70,10 @@ def initialize_inference_model(config=None):
         pad_id_tgt=tgt['tok2id']['<pad>'],
         config=config
     )
-    return model, src, tgt
+    if CUDA:
+        model = model.cuda()
+
+    return model, tgt
 
 class SeqModel(nn.Module):
     def __init__(
