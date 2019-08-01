@@ -11,6 +11,22 @@ import editdistance
 import src.data as data
 from src.cuda import CUDA
 
+from flask import Flask
+import logging
+import time
+
+import os
+import logging
+from utils.log_func import get_log_func
+
+app = Flask(__name__)
+app.logger.debug('debug')
+
+log_level = os.getenv("LOG_LEVEL", "WARNING")
+root_logger = logging.getLogger()
+root_logger.setLevel(log_level)
+log = get_log_func(__name__)
+
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # BLEU functions from https://github.com/MaximumEntropy/Seq2Seq-PyTorch
@@ -67,6 +83,8 @@ def decode_minibatch(max_len, start_id, model, src_input, srclens, srcmask,
             [start_id] for i in range(src_input.size(0))
         ]
     ))
+    log(f"tgt_input: {tgt_input}", level='debug')
+
     if CUDA:
         tgt_input = tgt_input.cuda()
 
@@ -103,12 +121,14 @@ def decode_dataset(model, src, tgt, config):
         input_lines_src, output_lines_src, srclens, srcmask, indices = input_content
         input_ids_aux, _, auxlens, auxmask, _ = input_aux
         input_lines_tgt, output_lines_tgt, _, _, _ = output
+        log(f"input_lines_src: {input_lines_src}", level='debug')
 
         # TODO -- beam search
         tgt_pred = decode_minibatch(
             config['data']['max_len'], tgt['tok2id']['<s>'], 
             model, input_lines_src, srclens, srcmask,
             input_ids_aux, auxlens, auxmask)
+        log(f"target pred: {tgt_pred}", level="debug")
 
         # convert seqs to tokens
         def ids_to_toks(tok_seqs, id2tok):
@@ -196,3 +216,55 @@ def evaluate_lpp(model, src, tgt, config):
         losses.append(loss.item())
 
     return np.mean(losses)
+
+def predict_text(text, model, src, tgt, config):
+
+    start_time = time.time()
+
+    # read test data 
+    # line = text.strip().lower().split()
+    # line, content, attribute_markers = data.extract_attributes(line, 
+    #                                                             src['pre_attr'], 
+    #                                                             src['pre_attr'])
+    # src_dist_measurer = data.CorpusSearcher(
+    #     query_corpus=[' '.join(x) for x in attribute_markers],
+    #     key_corpus=[' '.join(x) for x in attribute_markers],
+    #     value_corpus=[' '.join(x) for x in attribute_markers],
+    #     vectorizer=data.CountVectorizer(vocabulary=src['tok2id']),
+    #     make_binary=True
+    # )
+    # src_test = {
+    #     'data': [line], 'content': [content], 'attribute': [attribute_markers],
+    #     'tok2id': src['tok2id'], 'id2tok': src['id2tok'], 'dist_measurer': src_dist_measurer,
+    #     'pre_attr': src['pre_attr'], 'post_attr': src['post_attr']
+    # }
+
+    # read test data (write input to dummy file to utilize batch functions)
+    f_src = open('src.txt', 'w')
+    f_tgt = open('tgt.txt', 'w')
+    f_src.write('coal chamber, sepultura, type o negative')
+    f_tgt.write('Coal chamber, sepultura, Type O negative.')
+    f_src.close()
+    f_tgt.close()
+    src_test, tgt_test = data.read_nmt_data(
+        src='src.txt',
+        config=config,
+        tgt='tgt.txt',
+        attribute_vocab=config['data']['attribute_vocab'],
+        ngram_attributes=config['data']['ngram_attributes'],
+        train_src=src,
+        train_tgt=tgt
+    )
+    os.remove('src.txt')
+    os.remove('tgt.txt')
+    log(f"reading test data took {time.time()-start_time} seconds", level='debug')
+    start_time = time.time()
+    inputs, preds, gt, auxs = decode_dataset(model, src_test, tgt_test, config)
+    log(f"inputs: {inputs}", level="debug")
+    log(f"preds: {preds}", level="debug")
+    log(f"auxs: {auxs}", level="debug")
+    log(f"decoding test data took {time.time()-start_time} seconds")
+
+    return preds
+
+    

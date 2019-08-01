@@ -2,6 +2,8 @@
 import glob
 import numpy as np
 import os
+import logging
+from utils.log_func import get_log_func
 
 import torch
 import torch.nn as nn
@@ -11,7 +13,12 @@ import src.decoders as decoders
 import src.encoders as encoders
 
 from src.cuda import CUDA
+from src import data
 
+log_level = os.getenv("LOG_LEVEL", "WARNING")
+root_logger = logging.getLogger()
+root_logger.setLevel(log_level)
+log = get_log_func(__name__)
 
 def get_latest_ckpt(ckpt_dir):
     ckpts = glob.glob(os.path.join(ckpt_dir, '*.ckpt'))
@@ -41,6 +48,26 @@ def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None):
     else:
         return model, 0
 
+def initialize_inference_model(config=None):
+
+    # read data from training corpus to estalish attribute vocabulary
+    log("reading training data from style corpus'", level="debug")
+    src, tgt = data.read_nmt_data(
+        src=config['data']['src'],
+        config=config,
+        tgt=config['data']['tgt'],
+        attribute_vocab=config['data']['attribute_vocab'],
+        ngram_attributes=config['data']['ngram_attributes']
+    )
+    log("initializing model", level="debug")
+    model = SeqModel(
+        src_vocab_size=len(src['tok2id']),
+        tgt_vocab_size=len(tgt['tok2id']),
+        pad_id_src=src['tok2id']['<pad>'],
+        pad_id_tgt=tgt['tok2id']['<pad>'],
+        config=config
+    )
+    return model, src, tgt
 
 class SeqModel(nn.Module):
     def __init__(

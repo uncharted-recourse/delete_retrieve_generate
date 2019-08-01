@@ -3,24 +3,24 @@
     "optimizer": "adam",
     "learning_rate": 0.0003,
     "max_norm": 3.0,
-    "epochs": 70,
+    "epochs": 1,
     "batches_per_report": 200,
     "batches_per_sampling": 500,
     "random_seed": 1
   },
   "data": {
-    "src": "data/yelp/sentiment.train.0",
-    "tgt": "data/yelp/sentiment.train.1",
-    "src_test": "data/yelp/reference.test.0",
-    "tgt_test": "data/yelp/reference.test.1",
-    "src_vocab": "data/yelp/vocab",
-    "tgt_vocab": "data/yelp/vocab",
+    "src": "data/gyafc/sentiment.train.0",
+    "tgt": "data/gyafc/sentiment.train.1",
+    "src_test": "data/gyafc/src.txt",
+    "tgt_test": "data/gyafc/tgt.txt",
+    "src_vocab": "data/gyafc/vocab_15000.txt",
+    "tgt_vocab": "data/gyafc/vocab_15000.txt",
     "share_vocab": true,
-    "attribute_vocab": "data/yelp/ngram.15.attribute",
+    "attribute_vocab": "data/gyafc/attribute_vocab_ngram_15000_sal_5.txt",
     "ngram_attributes": true,
     "batch_size": 256,
     "max_len": 50,
-    "working_dir": "working_dir"
+    "working_dir": "checkpoints/del_and_ret-formal"
   },
     "model": {
         "model_type": "delete",
