@@ -10,6 +10,13 @@ from torch.autograd import Variable
 
 from src.cuda import CUDA
 
+import logging
+from utils.log_func import get_log_func
+
+log_level = os.getenv("LOG_LEVEL", "WARNING")
+root_logger = logging.getLogger()
+root_logger.setLevel(log_level)
+log = get_log_func(__name__)
 
 class CorpusSearcher(object):
     def __init__(self, query_corpus, key_corpus, value_corpus, vectorizer, make_binary=True):
@@ -29,7 +36,6 @@ class CorpusSearcher(object):
         
     def most_similar(self, key_idx, n=10):
         """ score the query against the keys and take the corresponding values """
-
         query = self.query_corpus[key_idx]
         query_vec = self.vectorizer.transform([query])
 
@@ -74,11 +80,11 @@ def build_vocab_maps(vocab_file):
     return tok_to_id, id_to_tok
 
 
-def extract_attributes(line, attribute_vocab, use_ngrams=False):
+def extract_attributes(line, attribute_vocab, use_ngrams=False, ngram_range = 5):
     if use_ngrams:
         # generate all ngrams for the sentence
         grams = []
-        for i in range(1, 5):
+        for i in range(1, ngram_range):
             try:
                 i_grams = [
                     " ".join(gram)
@@ -140,7 +146,7 @@ def read_nmt_data(src, config, tgt, attribute_vocab, train_src=None, train_tgt=N
 
     src_lines = [l.strip().lower().split() for l in open(src, 'r')]
     src_lines, src_content, src_attribute = list(zip(
-        *[extract_attributes(line, pre_attr, pre_attr) for line in src_lines]
+        *[extract_attributes(line, pre_attr, pre_attr, config['data']['ngram_range']) for line in src_lines]
     ))
     src_tok2id, src_id2tok = build_vocab_maps(config['data']['src_vocab'])
     # train time: just pick attributes that are close to the current (using word distance)
@@ -162,7 +168,7 @@ def read_nmt_data(src, config, tgt, attribute_vocab, train_src=None, train_tgt=N
 
     tgt_lines = [l.strip().lower().split() for l in open(tgt, 'r')] if tgt else None
     tgt_lines, tgt_content, tgt_attribute = list(zip(
-        *[extract_attributes(line, post_attr, post_attr) for line in tgt_lines]
+        *[extract_attributes(line, post_attr, post_attr, config['data']['ngram_range']) for line in tgt_lines]
     ))
     tgt_tok2id, tgt_id2tok = build_vocab_maps(config['data']['tgt_vocab'])
     # train time: just pick attributes that are close to the current (using word distance)
@@ -186,7 +192,7 @@ def read_nmt_data(src, config, tgt, attribute_vocab, train_src=None, train_tgt=N
         )
     tgt = {
         'data': tgt_lines, 'content': tgt_content, 'attribute': tgt_attribute,
-        'tok2id': tgt_tok2id, 'id2tok': tgt_id2tok, 'dist_measurer': tgt_dist_measurer
+        'tok2id': tgt_tok2id, 'id2tok': tgt_id2tok, 'dist_measurer': tgt_dist_measurer,
     }
     return src, tgt
 

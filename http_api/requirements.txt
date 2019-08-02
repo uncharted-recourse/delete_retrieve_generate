@@ -1,0 +1,4 @@
+flask
+markdown
+pypugjs
+pandas

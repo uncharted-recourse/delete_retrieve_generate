@@ -1,0 +1,39 @@
+{
+  "training": {
+    "optimizer": "adam",
+    "learning_rate": 0.0003,
+    "max_norm": 3.0,
+    "epochs": 1,
+    "batches_per_report": 200,
+    "batches_per_sampling": 500,
+    "random_seed": 1
+  },
+  "data": {
+    "src": "data/gyafc/sentiment.train.0",
+    "tgt": "data/gyafc/sentiment.train.1",
+    "src_test": "data/gyafc/sentiment.dev.0",
+    "tgt_test": "data/gyafc/sentiment.dev.1",
+    "src_vocab": "/home/ubuntu/ASED/marionette/text_datasets/gyafc/processed/subword-encoder-lower-1000_informal.subwords",
+    "tgt_vocab": "/home/ubuntu/ASED/marionette/text_datasets/gyafc/processed/subword-encoder-lower-1000_formal.subwords",
+    "share_vocab": false,
+    "attribute_vocab": "data/gyafc/attribute_vocab_ngram_15000_sal_5.txt",
+    "ngram_attributes": true,
+    "ngram_range": 5,
+    "batch_size": 256,
+    "max_len": 50,
+    "working_dir": "del_and_ret_subword"
+  },
+    "model": {
+        "model_type": "delete_retrieve",
+        "emb_dim": 128,
+        "attention": false,
+        "encoder": "lstm",
+        "src_hidden_dim": 512,
+        "src_layers": 1,
+        "bidirectional": true,
+        "tgt_hidden_dim": 512,
+        "tgt_layers": 1,
+        "decode": "greedy",
+        "dropout": 0.2
+    }
+}

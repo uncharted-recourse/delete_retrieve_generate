@@ -2,6 +2,8 @@
 import glob
 import numpy as np
 import os
+import logging
+from utils.log_func import get_log_func
 
 import torch
 import torch.nn as nn
@@ -11,7 +13,13 @@ import src.decoders as decoders
 import src.encoders as encoders
 
 from src.cuda import CUDA
+from src import data
+from src.data import extract_attributes, build_vocab_maps, CorpusSearcher, TfidfVectorizer
 
+log_level = os.getenv("LOG_LEVEL", "WARNING")
+root_logger = logging.getLogger()
+root_logger.setLevel(log_level)
+log = get_log_func(__name__)
 
 def get_latest_ckpt(ckpt_dir):
     ckpts = glob.glob(os.path.join(ckpt_dir, '*.ckpt'))
@@ -26,21 +34,92 @@ def get_latest_ckpt(ckpt_dir):
     return epoch, ckpt_path
 
 
-def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None):
+def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None, map_location=None):
     assert checkpoint_dir or checkpoint_path
-
     if checkpoint_dir:
         epoch, checkpoint_path = get_latest_ckpt(checkpoint_dir)
     else:
         epoch = int(checkpoint_path.split('.')[-2])
 
     if checkpoint_path:
-        model.load_state_dict(torch.load(checkpoint_path))
-        print('Load from %s sucessful!' % checkpoint_path)
+        model.load_state_dict(torch.load(checkpoint_path, map_location=map_location))
+        log('Load from %s sucessful!' % checkpoint_path, level="debug")
         return model, epoch + 1
     else:
         return model, 0
 
+def initialize_inference_model(config=None):
+
+    # read target data from training corpus to estalish attribute vocabulary / similarity
+    log("reading training data from style corpus'", level="debug")
+    
+    if config['data']['ngram_attributes']:
+        # read attribute vocab as a dictionary mapping attributes to scores
+        pre_attr = {}
+        post_attr = {}
+        with open(config['data']['attribute_vocab']) as attr_file:
+            next(attr_file) # skip header
+            for line in attr_file:
+                parts = line.strip().split()
+                pre_salience = float(parts[-2])
+                post_salience = float(parts[-1])
+                attr = ' '.join(parts[:-2])
+                pre_attr[attr] = pre_salience
+                post_attr[attr] = post_salience
+    else:
+        pre_attr = post_attr = set([x.strip() for x in open(config['data']['attribute_vocab'])])
+
+    src_lines = src_content = src_attribute = src_dist_measurer = None
+    tgt_lines = tgt_content = tgt_attribute = tgt_dist_measurer = None
+    src_tok2id, src_id2tok = build_vocab_maps(config['data']['src_vocab'])
+    tgt_tok2id, tgt_id2tok = build_vocab_maps(config['data']['tgt_vocab'])
+
+    if config['model']['model_type'] == 'delete_retrieve':
+        src_lines = [l.strip().lower().split() for l in open(config['data']['src'], 'r')] if config['data']['src'] else None
+        tgt_lines = [l.strip().lower().split() for l in open(config['data']['tgt'], 'r')] if config['data']['tgt'] else None
+
+        src_lines, src_content, src_attribute = list(zip(
+            *[extract_attributes(line, pre_attr, pre_attr, config['data']['ngram_range']) for line in src_lines]
+        ))
+        tgt_lines, tgt_content, tgt_attribute = list(zip(
+            *[extract_attributes(line, post_attr, post_attr, config['data']['ngram_range']) for line in tgt_lines]
+        ))
+        src_dist_measurer = CorpusSearcher(
+            query_corpus=[' '.join(x) for x in tgt_content],
+            key_corpus=[' '.join(x) for x in src_content],
+            value_corpus=[' '.join(x) for x in src_attribute],
+            vectorizer=TfidfVectorizer(vocabulary=src_tok2id),
+            make_binary=True
+        )
+        tgt_dist_measurer = CorpusSearcher(
+            query_corpus=[' '.join(x) for x in src_content],
+            key_corpus=[' '.join(x) for x in tgt_content],
+            value_corpus=[' '.join(x) for x in tgt_attribute],
+            vectorizer=TfidfVectorizer(vocabulary=tgt_tok2id),
+            make_binary=True
+        )
+    src = {
+        'data': src_lines, 'content': src_content, 'attribute': src_attribute,
+        'tok2id': src_tok2id, 'id2tok': src_id2tok, 'dist_measurer': src_dist_measurer,
+        'attr': pre_attr
+    }
+    tgt = {
+        'data': tgt_lines, 'content': tgt_content, 'attribute': tgt_attribute,
+        'tok2id': tgt_tok2id, 'id2tok': tgt_id2tok, 'dist_measurer': tgt_dist_measurer,
+        'attr': post_attr
+    }
+    log("initializing model", level="debug")
+    model = SeqModel(
+        src_vocab_size=len(tgt['tok2id']),
+        tgt_vocab_size=len(tgt['tok2id']),
+        pad_id_src=tgt['tok2id']['<pad>'],
+        pad_id_tgt=tgt['tok2id']['<pad>'],
+        config=config
+    )
+    if CUDA:
+        model = model.cuda()
+
+    return model, src, tgt
 
 class SeqModel(nn.Module):
     def __init__(

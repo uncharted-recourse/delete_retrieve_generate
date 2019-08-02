@@ -65,11 +65,11 @@ logging.getLogger('').addHandler(console)
 
 logging.info('Reading data ...')
 src, tgt = data.read_nmt_data(
-    src=config['data']['src'],
-    config=config,
-    tgt=config['data']['tgt'],
-    attribute_vocab=config['data']['attribute_vocab'],
-    ngram_attributes=config['data']['ngram_attributes']
+   src=config['data']['src'],
+   config=config,
+   tgt=config['data']['tgt'],
+   attribute_vocab=config['data']['attribute_vocab'],
+   ngram_attributes=config['data']['ngram_attributes']
 )
 
 src_test, tgt_test = data.read_nmt_data(
@@ -78,11 +78,10 @@ src_test, tgt_test = data.read_nmt_data(
     tgt=config['data']['tgt_test'],
     attribute_vocab=config['data']['attribute_vocab'],
     ngram_attributes=config['data']['ngram_attributes'],
-    train_src=src,
+    train_src=True,
     train_tgt=tgt
 )
 logging.info('...done!')
-
 
 batch_size = config['data']['batch_size']
 max_length = config['data']['max_len']
@@ -101,11 +100,11 @@ torch.manual_seed(config['training']['random_seed'])
 np.random.seed(config['training']['random_seed'])
 
 model = models.SeqModel(
-    src_vocab_size=src_vocab_size,
-    tgt_vocab_size=tgt_vocab_size,
-    pad_id_src=src['tok2id']['<pad>'],
-    pad_id_tgt=tgt['tok2id']['<pad>'],
-    config=config
+   src_vocab_size=src_vocab_size,
+   tgt_vocab_size=tgt_vocab_size,
+   pad_id_src=src['tok2id']['<pad>'],
+   pad_id_tgt=tgt['tok2id']['<pad>'],
+   config=config
 )
 
 logging.info('MODEL HAS %s params' %  model.count_params())
@@ -138,6 +137,7 @@ num_batches = len(src['content']) / batch_size
 
 STEP = 0
 for epoch in range(start_epoch, config['training']['epochs']):
+    
     if cur_metric > best_metric:
         # rm old checkpoint
         for ckpt_path in glob.glob(working_dir + '/model.*'):
@@ -200,7 +200,6 @@ for epoch in range(start_epoch, config['training']['epochs']):
         STEP += 1
     if args.overfit:
         continue
-
     logging.info('EPOCH %s COMPLETE. EVALUATING...' % epoch)
     start = time.time()
     model.eval()
@@ -210,6 +209,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
     writer.add_scalar('eval/loss', dev_loss, epoch)
 
     if args.bleu and epoch >= config['training'].get('inference_start_epoch', 1):
+        
         cur_metric, edit_distance, inputs, preds, golds, auxs = evaluation.inference_metrics(
             model, src_test, tgt_test, config)
 
@@ -227,13 +227,11 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
     else:
         cur_metric = dev_loss
-
+   
     model.train()
-
     logging.info('METRIC: %s. TIME: %.2fs CHECKPOINTING...' % (
         cur_metric, (time.time() - start)))
     avg_loss = np.mean(epoch_loss)
     epoch_loss = []
-
 writer.close()
 
