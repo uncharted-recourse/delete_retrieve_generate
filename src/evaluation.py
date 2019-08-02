@@ -211,18 +211,18 @@ def evaluate_lpp(model, src, tgt, config):
 
     return np.mean(losses)
 
-def predict_text(text, model, tgt, config, forward = True):
+def predict_text(text, model, src, tgt, config, forward = True):
 
     start_time = time.time()
     # remove attributes from input text
     src_lines = [text.strip().lower().split()]
     src_lines, src_content, src_attribute = list(zip(
-        *[data.extract_attributes(line, config['data']['src_vocab'], tgt['attr'], tgt['attr'], config['data']['ngram_range']) for line in src_lines]
+        *[data.extract_attributes(line, config['data']['src_vocab'], src['attr'], src['attr'], config['data']['ngram_range']) for line in src_lines]
     ))
 
     # convert content to tokens
     max_len = config['data']['max_len']
-    tok2id = tgt['tok2id']
+    tok2id = src['tok2id']
     lines = [['<s>'] + l[:max_len] + ['</s>'] for l in src_lines]
     content_length = [len(l) - 1 for l in lines]
     content_mask = [([1] * l) for l in content_length]
@@ -257,7 +257,7 @@ def predict_text(text, model, tgt, config, forward = True):
     # make predictions
     model.eval()
     tgt_pred = decode_minibatch(
-        max_len, tok2id['<s>'], 
+        max_len, tgt['tok2id']['<s>'], 
         model, content, content_length, content_mask,
         attributes, attributes_len, attributes_mask
     )

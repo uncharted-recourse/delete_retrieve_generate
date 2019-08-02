@@ -109,11 +109,14 @@ def req_style_transfer(read_test_data=False):
         if style in STYLE_DICT_FORWARD:
             forward = True
             tgt = del_and_ret_model['tgt']
+            src = del_and_ret_model['src']
         else:
             forward = False
             tgt = del_and_ret_model['src']
+            src = del_and_ret_model['tgt']
         pred_text = predict_text(text, 
             del_and_ret_model['model'], 
+            src,
             tgt,
             del_and_ret_model['config'],
             forward=forward
