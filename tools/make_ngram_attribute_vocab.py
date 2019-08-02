@@ -1,10 +1,9 @@
 """
-python make_ngram_attribute_vocab.py [vocab] [corpus1] [corpus2] r n subword
+python make_ngram_attribute_vocab.py [vocab] [corpus1] [corpus2] r n 
 
 subsets a [vocab] file by finding the words or subwords most associated with
 one of two corpuses. threshold is r ( # in corpus_a  / # in corpus_b )
 uses ngrams with ngram range = n
-subword is boolean indicating whether input vocab files are boolean
 """
 import sys
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
@@ -61,10 +60,6 @@ r = float(sys.argv[4])
 
 # the ngram range
 n = int(sys.argv[5])
-
-# whether vocabularies are subwords
-inbool = sys.argv[6].lower()
-subwords = inbool == 'true' or inbool == 'True':
 
 def tokenize(text):
     text = text.split()

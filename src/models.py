@@ -79,10 +79,10 @@ def initialize_inference_model(config=None):
         tgt_lines = [l.strip().lower().split() for l in open(config['data']['tgt'], 'r')] if config['data']['tgt'] else None
 
         src_lines, src_content, src_attribute = list(zip(
-            *[extract_attributes(line, config['data']['src_vocab'], pre_attr, pre_attr, config['data']['ngram_range']) for line in src_lines]
+            *[extract_attributes(line, pre_attr, pre_attr, config['data']['ngram_range']) for line in src_lines]
         ))
         tgt_lines, tgt_content, tgt_attribute = list(zip(
-            *[extract_attributes(line, config['data']['tgt_vocab'], post_attr, post_attr, config['data']['ngram_range']) for line in tgt_lines]
+            *[extract_attributes(line, post_attr, post_attr, config['data']['ngram_range']) for line in tgt_lines]
         ))
         src_dist_measurer = CorpusSearcher(
             query_corpus=[' '.join(x) for x in tgt_content],

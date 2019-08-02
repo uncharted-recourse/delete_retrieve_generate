@@ -217,7 +217,7 @@ def predict_text(text, model, src, tgt, config, forward = True):
     # remove attributes from input text
     src_lines = [text.strip().lower().split()]
     src_lines, src_content, src_attribute = list(zip(
-        *[data.extract_attributes(line, config['data']['src_vocab'], src['attr'], src['attr'], config['data']['ngram_range']) for line in src_lines]
+        *[data.extract_attributes(line, src['attr'], src['attr'], config['data']['ngram_range']) for line in src_lines]
     ))
 
     # convert content to tokens
