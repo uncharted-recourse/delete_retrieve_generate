@@ -26,7 +26,8 @@ app.logger.debug('debug')
 MODELS = {}
 
 # mapping from style names to prefix strings (used in fnames)
-STYLE_DICT = {}
+STYLE_DICT_FORWARD = {}
+STYLE_DICT_BACKWARD = {}
 
 
 def get_model(style_name, read_binary=False):
@@ -35,12 +36,15 @@ def get_model(style_name, read_binary=False):
         return MODELS[style_name]
 
     log("loading new model", level="debug")
-    model_fname_prefix = STYLE_DICT[style_name]
+    if style_name in STYLE_DICT_FORWARD:
+        model_fname_prefix = STYLE_DICT_FORWARD[style_name]
+    else: 
+        model_fname_prefix = STYLE_DICT_BACKWARD[style_name]
     model_config_fpath = f"checkpoints/{model_fname_prefix}/config.json"
     model_config = read_json(model_config_fpath)
 
     start_time = time.time()
-    del_and_ret_model, tgt = initialize_inference_model(config=model_config, read_binary = read_binary)
+    del_and_ret_model, src, tgt = initialize_inference_model(config=model_config, read_binary = read_binary)
     log("model created", level="debug")
     del_and_ret_model, _ = attempt_load_model(
         model=del_and_ret_model,
@@ -48,27 +52,32 @@ def get_model(style_name, read_binary=False):
         map_location=torch.device('cpu')
     )
     log("model weights loaded", level="debug")
-    log(f"model initialization and loading took {time.time()-start_time} seconds", level="debug")
+    log(f"{style_name} model initialization and loading took {time.time()-start_time} seconds", level="debug")
 
     # store the model information in memory before returning
     MODELS[style_name] = {}
     MODELS[style_name]['model'] = del_and_ret_model
     MODELS[style_name]['config'] = model_config
+    MODELS[style_name]['src'] = src
     MODELS[style_name]['tgt'] = tgt
 
     return MODELS[style_name]
 
 
 #pre-load formal and romantic models
-STYLE_DICT["formal"] = "del_and_ret-formal"
-log("loading formal model", level="debug")
-get_model("formal")
+STYLE_DICT_FORWARD["formal"] = "del_and_ret-formal"
+STYLE_DICT_BACKWARD["informal"] = "del_and_ret-formal"
+log("loading formal and informal models", level="debug")
+MODELS["informal"] = get_model("formal")
 assert "formal" in MODELS
+assert "informal" in MODELS
 
-STYLE_DICT["romantic"] = "del_and_ret-romantic"
-log("loading romantic model", level="debug")
-get_model("romantic", read_binary=True)
+STYLE_DICT_FORWARD["romantic"] = "del_and_ret-romantic"
+STYLE_DICT_BACKWARD["humorous"] = "del_and_ret-formal"
+log("loading romantic and humorous models", level="debug")
+MODELS["humorous"] = get_model("romantic", read_binary=True)
 assert "romantic" in MODELS
+assert "humorous" in MODELS
 
 
 @app.route("/")
@@ -85,7 +94,7 @@ def req_style_transfer(read_test_data=False):
     log("request received", level="debug")
     try:
         style = request.values.get("style", "formal")
-        if style not in STYLE_DICT:
+        if style not in STYLE_DICT_FORWARD and style not in STYLE_DICT_BACKWARD:
             raise Exception(f"style {style} not supported")
 
         text = request.values.get("input_text")
@@ -97,10 +106,17 @@ def req_style_transfer(read_test_data=False):
         del_and_ret_model = get_model(style)
 
         log("predicting text", level="debug")
+        if style in STYLE_DICT_FORWARD:
+            forward = True
+            tgt = del_and_ret_model['tgt']
+        else:
+            forward = False
+            tgt = del_and_ret_model['src']
         pred_text = predict_text(text, 
             del_and_ret_model['model'], 
-            del_and_ret_model['tgt'],
-            del_and_ret_model['config']
+            tgt,
+            del_and_ret_model['config'],
+            forward=forward
         )
         log(f"prediction took {time.time()-start_time} seconds", level="debug")
 

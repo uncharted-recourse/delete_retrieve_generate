@@ -80,14 +80,14 @@ def build_vocab_maps(vocab_file):
     return tok_to_id, id_to_tok
 
 
-def extract_attributes(line, corpus_vocab, attribute_vocab, use_ngrams=False, read_binary = False):
+def extract_attributes(line, corpus_vocab, attribute_vocab, use_ngrams=False, ngram_range = 5, read_binary = False):
     if read_binary:
         corpus_vocab_binary = set([w.strip() for i, w in enumerate(open(corpus_vocab, 'rb'))])    
         line = [w.decode('utf-8').lower() if w in corpus_vocab_binary else '<unk>' for w in line]
     if use_ngrams:
         # generate all ngrams for the sentence
         grams = []
-        for i in range(1, 5):
+        for i in range(1, ngram_range):
             try:
                 i_grams = [
                     " ".join(gram)
@@ -152,7 +152,7 @@ def read_nmt_data(src, config, tgt, attribute_vocab, train_src=None, train_tgt=N
         src_lines = [l.strip().lower().split() for l in open(src, 'r')]
 
     src_lines, src_content, src_attribute = list(zip(
-        *[extract_attributes(line, config['data']['src_vocab'], pre_attr, pre_attr, read_binary) for line in src_lines]
+        *[extract_attributes(line, config['data']['src_vocab'], pre_attr, pre_attr, config['data']['ngram_range'], read_binary) for line in src_lines]
     ))
     src_tok2id, src_id2tok = build_vocab_maps(config['data']['src_vocab'])
     # train time: just pick attributes that are close to the current (using word distance)
@@ -177,7 +177,7 @@ def read_nmt_data(src, config, tgt, attribute_vocab, train_src=None, train_tgt=N
         tgt_lines = [l.strip().lower().split() for l in open(tgt, 'r')] if tgt else None
 
     tgt_lines, tgt_content, tgt_attribute = list(zip(
-        *[extract_attributes(line, config['data']['tgt_vocab'], post_attr, post_attr, read_binary) for line in tgt_lines]
+        *[extract_attributes(line, config['data']['tgt_vocab'], post_attr, post_attr, config['data']['ngram_range'], read_binary) for line in tgt_lines]
     ))
     tgt_tok2id, tgt_id2tok = build_vocab_maps(config['data']['tgt_vocab'])
     # train time: just pick attributes that are close to the current (using word distance)

@@ -1,9 +1,9 @@
 """
-python make_ngram_attribute_vocab.py [vocab] [corpus1] [corpus2] r
+python make_ngram_attribute_vocab.py [vocab] [corpus1] [corpus2] r n
 
 subsets a [vocab] file by finding the words most associated with
 one of two corpuses. threshold is r ( # in corpus_a  / # in corpus_b )
-uses ngrams
+uses ngrams with ngram range = n
 """
 import sys
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
@@ -55,19 +55,22 @@ corpus2_sentences = [
     for l in open(sys.argv[3])
 ]
 
+# the salience ratio
+r = float(sys.argv[4])
+
+# the ngram range
+n = float(sys.argv[5])
+
 def tokenize(text):
     text = text.split()
     grams = []
-    for i in range(1, 5):
+    for i in range(1, n):
         i_grams = [
             " ".join(gram)
             for gram in ngrams(text, i)
         ]
         grams.extend(i_grams)
     return grams
-
-# the salience ratio
-r = float(sys.argv[4])
 
 def unk_corpus(sentences):
     corpus = []
@@ -89,7 +92,7 @@ sc = NgramSalienceCalculator(corpus1, corpus2, tokenize)
 print("marker", "negative_score", "positive_score")
 def calculate_attribute_markers(corpus):
     for sentence in tqdm(corpus):
-        for i in range(1, 5):
+        for i in range(1, n):
             i_grams = ngrams(sentence.split(), i)
             joined = [
                 " ".join(gram)

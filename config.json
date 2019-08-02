@@ -18,6 +18,7 @@
     "share_vocab": true,
     "attribute_vocab": "data/gyafc/attribute_vocab_ngram_15000_sal_5.txt",
     "ngram_attributes": true,
+    "ngram_range": 5,
     "batch_size": 256,
     "max_len": 50,
     "working_dir": "checkpoints/del_and_ret-formal"

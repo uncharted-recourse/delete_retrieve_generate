@@ -14,7 +14,7 @@ import src.encoders as encoders
 
 from src.cuda import CUDA
 from src import data
-from src.data import extract_attributes, build_vocab_maps, CorpusSearcher, CountVectorizer
+from src.data import extract_attributes, build_vocab_maps, CorpusSearcher, TfidfVectorizer
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -69,25 +69,48 @@ def initialize_inference_model(config=None, read_binary=False):
     else:
         pre_attr = post_attr = set([x.strip() for x in open(config['data']['attribute_vocab'])])
 
-    if read_binary:
-        tgt_lines = [l.strip().split() for l in open(config['data']['tgt'], 'rb')] if config['data']['tgt'] else None
-    else:
-        tgt_lines = [l.strip().lower().split() for l in open(config['data']['tgt'], 'r')] if config['data']['tgt'] else None
-    tgt_lines, tgt_content, tgt_attribute = list(zip(
-        *[extract_attributes(line, config['data']['tgt_vocab'], post_attr, post_attr, read_binary) for line in tgt_lines]
-    ))
+    src_lines = src_content = src_attribute = src_dist_measurer = None
+    tgt_lines = tgt_content = tgt_attribute = tgt_dist_measurer = None
+    src_tok2id, src_id2tok = build_vocab_maps(config['data']['src_vocab'])
     tgt_tok2id, tgt_id2tok = build_vocab_maps(config['data']['tgt_vocab'])
-    tgt_dist_measurer = CorpusSearcher(
-        query_corpus=[' '.join(x) for x in tgt_attribute],
-        key_corpus=[' '.join(x) for x in tgt_attribute],
-        value_corpus=[' '.join(x) for x in tgt_attribute],
-        vectorizer=CountVectorizer(vocabulary=tgt_tok2id),
-        make_binary=True
-    )
+
+    if config['model']['model_type'] == 'delete_retrieve':
+        if read_binary:
+            src_lines = [l.strip().split() for l in open(config['data']['src'], 'rb')] if config['data']['src'] else None
+            tgt_lines = [l.strip().split() for l in open(config['data']['tgt'], 'rb')] if config['data']['tgt'] else None
+        else:
+            src_lines = [l.strip().lower().split() for l in open(config['data']['src'], 'r')] if config['data']['src'] else None
+            tgt_lines = [l.strip().lower().split() for l in open(config['data']['tgt'], 'r')] if config['data']['tgt'] else None
+
+        src_lines, src_content, src_attribute = list(zip(
+            *[extract_attributes(line, config['data']['src_vocab'], pre_attr, pre_attr, config['data']['ngram_range'], read_binary) for line in src_lines]
+        ))
+        tgt_lines, tgt_content, tgt_attribute = list(zip(
+            *[extract_attributes(line, config['data']['tgt_vocab'], post_attr, post_attr, config['data']['ngram_range'], read_binary) for line in tgt_lines]
+        ))
+        src_dist_measurer = CorpusSearcher(
+            query_corpus=[' '.join(x) for x in tgt_content],
+            key_corpus=[' '.join(x) for x in src_content],
+            value_corpus=[' '.join(x) for x in src_attribute],
+            vectorizer=TfidfVectorizer(vocabulary=src_tok2id),
+            make_binary=True
+        )
+        tgt_dist_measurer = CorpusSearcher(
+            query_corpus=[' '.join(x) for x in src_content],
+            key_corpus=[' '.join(x) for x in tgt_content],
+            value_corpus=[' '.join(x) for x in tgt_attribute],
+            vectorizer=TfidfVectorizer(vocabulary=tgt_tok2id),
+            make_binary=True
+        )
+    src = {
+        'data': src_lines, 'content': src_content, 'attribute': src_attribute,
+        'tok2id': src_tok2id, 'id2tok': src_id2tok, 'dist_measurer': src_dist_measurer,
+        'attr': pre_attr
+    }
     tgt = {
         'data': tgt_lines, 'content': tgt_content, 'attribute': tgt_attribute,
         'tok2id': tgt_tok2id, 'id2tok': tgt_id2tok, 'dist_measurer': tgt_dist_measurer,
-        'pre_attr': pre_attr, 'post_attr': post_attr
+        'attr': post_attr
     }
     log("initializing model", level="debug")
     model = SeqModel(
@@ -100,7 +123,7 @@ def initialize_inference_model(config=None, read_binary=False):
     if CUDA:
         model = model.cuda()
 
-    return model, tgt
+    return model, src, tgt
 
 class SeqModel(nn.Module):
     def __init__(

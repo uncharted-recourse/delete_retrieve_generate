@@ -211,16 +211,13 @@ def evaluate_lpp(model, src, tgt, config):
 
     return np.mean(losses)
 
-def predict_text(text, model, tgt, config, read_binary=False):
+def predict_text(text, model, tgt, config, forward = True):
 
     start_time = time.time()
     # remove attributes from input text
-    if read_binary:
-        src_lines = [text.strip().split()]
-    else:
-        src_lines = [text.strip().lower().split()]
+    src_lines = [text.strip().lower().split()]
     src_lines, src_content, src_attribute = list(zip(
-        *[data.extract_attributes(line, config['data']['src_vocab'], tgt['pre_attr'], tgt['pre_attr'], read_binary) for line in src_lines]
+        *[data.extract_attributes(line, config['data']['src_vocab'], tgt['attr'], tgt['attr'], config['data']['ngram_range']) for line in src_lines]
     ))
 
     # convert content to tokens
@@ -235,14 +232,16 @@ def predict_text(text, model, tgt, config, read_binary=False):
     attributes_len = None
     attributes_mask = None
     if config['model']['model_type'] == 'delete':
-        attributes = [1]
+        if forward:
+            attributes = [1]
+        else:
+            attributes = [0]
     else:
         attributes = data.sample_replace(lines, tgt['dist_measurer'], 1.0, 0)
         attributes = [[tok2id.get(w, tok2id['<unk>']) for w in l[:-1]] for l in attributes]
         attributes_len = [len(l) - 1 for l in attributes]
         attributes_mask = [([1] * l) for l in attributes_len]
         attributes_mask = Variable(torch.LongTensor(attributes_mask))
-
 
     # convert to torch objects for prediction
     content = Variable(torch.LongTensor(content))
