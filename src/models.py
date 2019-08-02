@@ -48,7 +48,7 @@ def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None, map_loc
     else:
         return model, 0
 
-def initialize_inference_model(config=None, read_binary=False):
+def initialize_inference_model(config=None):
 
     # read target data from training corpus to estalish attribute vocabulary / similarity
     log("reading training data from style corpus'", level="debug")
@@ -75,18 +75,14 @@ def initialize_inference_model(config=None, read_binary=False):
     tgt_tok2id, tgt_id2tok = build_vocab_maps(config['data']['tgt_vocab'])
 
     if config['model']['model_type'] == 'delete_retrieve':
-        if read_binary:
-            src_lines = [l.strip().split() for l in open(config['data']['src'], 'rb')] if config['data']['src'] else None
-            tgt_lines = [l.strip().split() for l in open(config['data']['tgt'], 'rb')] if config['data']['tgt'] else None
-        else:
-            src_lines = [l.strip().lower().split() for l in open(config['data']['src'], 'r')] if config['data']['src'] else None
-            tgt_lines = [l.strip().lower().split() for l in open(config['data']['tgt'], 'r')] if config['data']['tgt'] else None
+        src_lines = [l.strip().lower().split() for l in open(config['data']['src'], 'r')] if config['data']['src'] else None
+        tgt_lines = [l.strip().lower().split() for l in open(config['data']['tgt'], 'r')] if config['data']['tgt'] else None
 
         src_lines, src_content, src_attribute = list(zip(
-            *[extract_attributes(line, config['data']['src_vocab'], pre_attr, pre_attr, config['data']['ngram_range'], read_binary) for line in src_lines]
+            *[extract_attributes(line, config['data']['src_vocab'], pre_attr, pre_attr, config['data']['ngram_range']) for line in src_lines]
         ))
         tgt_lines, tgt_content, tgt_attribute = list(zip(
-            *[extract_attributes(line, config['data']['tgt_vocab'], post_attr, post_attr, config['data']['ngram_range'], read_binary) for line in tgt_lines]
+            *[extract_attributes(line, config['data']['tgt_vocab'], post_attr, post_attr, config['data']['ngram_range']) for line in tgt_lines]
         ))
         src_dist_measurer = CorpusSearcher(
             query_corpus=[' '.join(x) for x in tgt_content],

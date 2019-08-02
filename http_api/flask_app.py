@@ -30,7 +30,7 @@ STYLE_DICT_FORWARD = {}
 STYLE_DICT_BACKWARD = {}
 
 
-def get_model(style_name, read_binary=False):
+def get_model(style_name):
     if style_name in MODELS:
         log("returning preloaded model", level="debug")
         return MODELS[style_name]
@@ -44,7 +44,7 @@ def get_model(style_name, read_binary=False):
     model_config = read_json(model_config_fpath)
 
     start_time = time.time()
-    del_and_ret_model, src, tgt = initialize_inference_model(config=model_config, read_binary = read_binary)
+    del_and_ret_model, src, tgt = initialize_inference_model(config=model_config)
     log("model created", level="debug")
     del_and_ret_model, _ = attempt_load_model(
         model=del_and_ret_model,
@@ -75,7 +75,7 @@ assert "informal" in MODELS
 STYLE_DICT_FORWARD["romantic"] = "del_and_ret-romantic"
 STYLE_DICT_BACKWARD["humorous"] = "del_and_ret-formal"
 log("loading romantic and humorous models", level="debug")
-MODELS["humorous"] = get_model("romantic", read_binary=True)
+MODELS["humorous"] = get_model("romantic")
 assert "romantic" in MODELS
 assert "humorous" in MODELS
 
