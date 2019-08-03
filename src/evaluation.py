@@ -16,6 +16,8 @@ import time
 import os
 import logging
 from utils.log_func import get_log_func
+import tensorflow_datasets as tfds
+
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -168,6 +170,14 @@ def inference_metrics(model, src, tgt, config):
     ground_truths = [' '.join(seq) for seq in ground_truths]
     auxs = [' '.join(seq) for seq in auxs]
 
+    # if encoder included in the config, decode tokens
+    if config['data']['encoder'] is not None:
+        encoder = tfds.features.text.SubwordTextEncoder.load_from_file(config['data']['encoder'])
+        inputs = [encoder.decode(seq) for seq in inputs]
+        preds = [encoder.decode(seq) for seq in preds]
+        ground_truths = [encoder.decode(seq) for seq in ground_truths]
+        auxs = [encoder.decode(seq) for seq in auxs]
+
     return bleu, edit_distance, inputs, preds, ground_truths, auxs
 
 
@@ -266,6 +276,12 @@ def predict_text(text, model, src, tgt, config, forward = True):
     preds = []
     preds += ids_to_toks(tgt_pred, tgt['id2tok'], sort=False)
     preds = ' '.join(preds[0])
+
+    # if encoder included in the config, decode tokens
+    if config['data']['encoder'] is not None:
+        encoder = tfds.features.text.SubwordTextEncoder.load_from_file(config['data']['encoder'])
+        preds = encoder.decode(preds)
+
     return preds
 
     

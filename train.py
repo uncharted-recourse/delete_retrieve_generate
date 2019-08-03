@@ -20,7 +20,6 @@ import src.data as data
 import src.models as models
 
 
-
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--config",
