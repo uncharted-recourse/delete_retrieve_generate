@@ -99,7 +99,7 @@ def decode_minibatch(max_len, start_id, model, src_input, srclens, srcmask,
     return tgt_input
 
 # convert seqs to tokens
-def ids_to_toks(tok_seqs, id2tok, sort = True):
+def ids_to_toks(tok_seqs, id2tok, sort = True, indices = None):
     out = []
     # take off the gpu
     tok_seqs = tok_seqs.cpu().numpy()
@@ -143,9 +143,9 @@ def decode_dataset(model, src, tgt, config):
             input_ids_aux, auxlens, auxmask)
 
         # convert inputs/preds/targets/aux to human-readable form
-        inputs += ids_to_toks(output_lines_src, src['id2tok'])
-        preds += ids_to_toks(tgt_pred, tgt['id2tok'])
-        ground_truths += ids_to_toks(output_lines_tgt, tgt['id2tok'])
+        inputs += ids_to_toks(output_lines_src, src['id2tok'], indices=indices)
+        preds += ids_to_toks(tgt_pred, tgt['id2tok'], indices=indices)
+        ground_truths += ids_to_toks(output_lines_tgt, tgt['id2tok'], indices=indices)
         
         if config['model']['model_type'] == 'delete':
             auxs += [[str(x)] for x in input_ids_aux.data.cpu().numpy()] # because of list comp in inference_metrics()
