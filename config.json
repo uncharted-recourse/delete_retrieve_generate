@@ -3,7 +3,7 @@
     "optimizer": "adam",
     "learning_rate": 0.0003,
     "max_norm": 3.0,
-    "epochs": 1,
+    "epochs": 100,
     "batches_per_report": 200,
     "batches_per_sampling": 500,
     "random_seed": 1
@@ -11,8 +11,8 @@
   "data": {
     "src": "data/gyafc/encoded_train_0.txt",
     "tgt": "data/gyafc/encoded_train_1.txt",
-    "src_test": "data/gyafc/encoded_dev_0.txt",
-    "tgt_test": "data/gyafc/encoded_dev_1.txt",
+    "src_test": "data/gyafc/encoded_valid_0.txt",
+    "tgt_test": "data/gyafc/encoded_valid_1.txt",
     "src_vocab": "data/gyafc/encoded_vocab.txt",
     "tgt_vocab": "data/gyafc/encoded_vocab.txt",
     "encoder": "data/gyafc/subword-encoder-1000.subwords",
