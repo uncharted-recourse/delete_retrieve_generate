@@ -18,7 +18,6 @@ import logging
 from utils.log_func import get_log_func
 import tensorflow_datasets as tfds
 
-
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
 root_logger.setLevel(log_level)
@@ -80,7 +79,6 @@ def decode_minibatch(max_len, start_id, model, src_input, srclens, srcmask,
             [start_id] for i in range(src_input.size(0))
         ]
     ))
-    log(f"tgt_input: {tgt_input}", level='debug')
 
     if CUDA:
         tgt_input = tgt_input.cuda()
@@ -150,7 +148,7 @@ def decode_dataset(model, src, tgt, config):
         if config['model']['model_type'] == 'delete':
             auxs += [[str(x)] for x in input_ids_aux.data.cpu().numpy()] # because of list comp in inference_metrics()
         elif config['model']['model_type'] == 'delete_retrieve':
-            auxs += ids_to_toks(input_ids_aux, tgt['id2tok'])
+            auxs += ids_to_toks(input_ids_aux, tgt['id2tok'], indices = indices)
         elif config['model']['model_type'] == 'seq2seq':
             auxs += ['None' for _ in range(len(tgt_pred))]
 
@@ -165,19 +163,22 @@ def inference_metrics(model, src, tgt, config):
     bleu = get_bleu(preds, ground_truths)
     edit_distance = get_edit_distance(preds, ground_truths)
 
-    inputs = [' '.join(seq) for seq in inputs]
-    preds = [' '.join(seq) for seq in preds]
-    ground_truths = [' '.join(seq) for seq in ground_truths]
-    auxs = [' '.join(seq) for seq in auxs]
-
     # if encoder included in the config, decode tokens
     if config['data']['encoder'] is not None:
         encoder = tfds.features.text.SubwordTextEncoder.load_from_file(config['data']['encoder'])
+        inputs = [[int(s) for s in seq if s.isdigit()] for seq in inputs]
+        preds = [[int(s) for s in seq if s.isdigit()] for seq in preds]
+        ground_truths = [[int(s) for s in seq if s.isdigit()] for seq in ground_truths]
+        auxs = [[int(s) for s in seq if s.isdigit()] for seq in auxs]
         inputs = [encoder.decode(seq) for seq in inputs]
         preds = [encoder.decode(seq) for seq in preds]
         ground_truths = [encoder.decode(seq) for seq in ground_truths]
         auxs = [encoder.decode(seq) for seq in auxs]
-
+    else:
+        inputs = [' '.join(seq) for seq in inputs]
+        preds = [' '.join(seq) for seq in preds]
+        ground_truths = [' '.join(seq) for seq in ground_truths]
+        auxs = [' '.join(seq) for seq in auxs]
     return bleu, edit_distance, inputs, preds, ground_truths, auxs
 
 
@@ -221,19 +222,28 @@ def evaluate_lpp(model, src, tgt, config):
 
     return np.mean(losses)
 
-def predict_text(text, model, src, tgt, config, forward = True):
+def predict_text(text, model, src, tgt, config, forward = True, remove_attributes = True):
 
     start_time = time.time()
+    input_data = text.strip().lower()
+    # encode input data if necessary 
+    if config['data']['encoder'] is not None:
+        encoder = tfds.features.text.SubwordTextEncoder.load_from_file(config['data']['encoder'])
+        input_data = [[str(e) for e in encoder.encode(input_data)]]
+    else:
+        input_data = [input_data.split()]
+    
     # remove attributes from input text
-    src_lines = [text.strip().lower().split()]
-    src_lines, src_content, src_attribute = list(zip(
-        *[data.extract_attributes(line, src['attr'], src['attr'], config['data']['ngram_range']) for line in src_lines]
-    ))
+    if remove_attributes:
+        src_lines, src_content, src_attribute = list(zip(
+            *[data.extract_attributes(line, src['attr'], src['attr'], config['data']['ngram_range']) for line in input_data]
+        ))
+        input_data = src_content
 
     # convert content to tokens
     max_len = config['data']['max_len']
     tok2id = src['tok2id']
-    lines = [['<s>'] + l[:max_len] + ['</s>'] for l in src_lines]
+    lines = [['<s>'] + l[:max_len] + ['</s>'] for l in input_data]
     content_length = [len(l) - 1 for l in lines]
     content_mask = [([1] * l) for l in content_length]
     content = [[tok2id.get(w, tok2id['<unk>']) for w in l[:-1]] for l in lines]
@@ -252,7 +262,7 @@ def predict_text(text, model, src, tgt, config, forward = True):
         attributes_len = [len(l) - 1 for l in attributes]
         attributes_mask = [([1] * l) for l in attributes_len]
         attributes_mask = Variable(torch.LongTensor(attributes_mask))
-
+    log(f'time for tokenization: {time.time() - start_time}', level='debug')
     # convert to torch objects for prediction
     content = Variable(torch.LongTensor(content))
     content_mask = Variable(torch.FloatTensor(content_mask))
@@ -271,16 +281,22 @@ def predict_text(text, model, src, tgt, config, forward = True):
         model, content, content_length, content_mask,
         attributes, attributes_len, attributes_mask
     )
+    log(f'time for predictions: {time.time() - start_time}', level='debug')
 
     # convert tokens to text
     preds = []
     preds += ids_to_toks(tgt_pred, tgt['id2tok'], sort=False)
-    preds = ' '.join(preds[0])
 
     # if encoder included in the config, decode tokens
     if config['data']['encoder'] is not None:
-        encoder = tfds.features.text.SubwordTextEncoder.load_from_file(config['data']['encoder'])
+        preds = [int(s) for s in preds[0] if s.isdigit()]
         preds = encoder.decode(preds)
+    else:
+        preds = ' '.join(preds[0])
+
+    log(f'time for decoding: {time.time() - start_time}', level='debug')
+
+
 
     return preds
 
