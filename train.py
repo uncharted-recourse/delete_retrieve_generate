@@ -20,7 +20,6 @@ import src.data as data
 import src.models as models
 
 
-
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--config",
@@ -61,7 +60,9 @@ console = logging.StreamHandler()
 console.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console.setFormatter(formatter)
-logging.getLogger('').addHandler(console)
+logger = logging.getLogger('')
+logger.addHandler(console)
+logger.setLevel(logging.INFO)
 
 logging.info('Reading data ...')
 src, tgt = data.read_nmt_data(

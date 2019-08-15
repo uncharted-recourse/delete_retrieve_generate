@@ -29,7 +29,6 @@ MODELS = {}
 STYLE_DICT_FORWARD = {}
 STYLE_DICT_BACKWARD = {}
 
-
 def get_model(style_name):
     if style_name in MODELS:
         log("returning preloaded model", level="debug")
@@ -93,11 +92,14 @@ def homepage():
 def req_style_transfer(read_test_data=False):
     log("request received", level="debug")
     try:
-        style = request.values.get("style", "formal")
+        if request.is_json:
+            style = request.json.get("style", "formal")
+            text = request.json.get("input_text")
+        else:
+            style = request.values.get("style", "formal")
+            text = request.values.get("input_text")
         if style not in STYLE_DICT_FORWARD and style not in STYLE_DICT_BACKWARD:
             raise Exception(f"style {style} not supported")
-
-        text = request.values.get("input_text")
         if not text:
             raise Exception("no input text found")
 
@@ -106,6 +108,8 @@ def req_style_transfer(read_test_data=False):
         del_and_ret_model = get_model(style)
 
         log("predicting text", level="debug")
+
+        # set direction of style for models trained on multiple styles
         if style in STYLE_DICT_FORWARD:
             forward = True
             tgt = del_and_ret_model['tgt']
@@ -114,12 +118,17 @@ def req_style_transfer(read_test_data=False):
             forward = False
             tgt = del_and_ret_model['src']
             src = del_and_ret_model['tgt']
+        if style == 'romantic' or style == 'humorous':
+            remove_attributes = False
+        else:
+            remove_attributes = True
         pred_text = predict_text(text, 
             del_and_ret_model['model'], 
             src,
             tgt,
             del_and_ret_model['config'],
-            forward=forward
+            forward=forward,
+            remove_attributes=remove_attributes
         )
         log(f"prediction took {time.time()-start_time} seconds", level="debug")
 
