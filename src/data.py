@@ -80,8 +80,26 @@ def build_vocab_maps(vocab_file):
     return tok_to_id, id_to_tok
 
 
-def extract_attributes(line, attribute_vocab, use_ngrams=False, ngram_range = 5):
-    if use_ngrams:
+def extract_attributes(line, attribute_vocab, use_ngrams=False, ngram_range = 5, noise_config = None):
+
+    # do noisy masking according to Lample et. al (2017)
+    # word dropout and random permutation of input sentence
+    if noise_config:
+        
+        content = []
+        # word dropout with probability
+        for tok in line:
+            if np.random.random_sample() > noise_config['dropout_prob']:
+                content.append(tok)
+
+        # permutation with parameter k for words not dropped
+        q = np.random.uniform(0, noise_config['k'] + 1, len(content))
+        content = [tok for _, tok in sorted(zip(q,content))]
+        
+        # don't need attributes if using noise model
+        attributes = None
+
+    elif use_ngrams:
         # generate all ngrams for the sentence
         grams = []
         for i in range(1, ngram_range):
@@ -146,7 +164,7 @@ def read_nmt_data(src, config, tgt, attribute_vocab, train_src=None, train_tgt=N
 
     src_lines = [l.strip().lower().split() for l in open(src, 'r')]
     src_lines, src_content, src_attribute = list(zip(
-        *[extract_attributes(line, pre_attr, pre_attr, config['data']['ngram_range']) for line in src_lines]
+        *[extract_attributes(line, pre_attr, pre_attr, config['data']['ngram_range'], config['data']['noise']) for line in src_lines]
     ))
     src_tok2id, src_id2tok = build_vocab_maps(config['data']['src_vocab'])
     # train time: just pick attributes that are close to the current (using word distance)
@@ -168,7 +186,7 @@ def read_nmt_data(src, config, tgt, attribute_vocab, train_src=None, train_tgt=N
 
     tgt_lines = [l.strip().lower().split() for l in open(tgt, 'r')] if tgt else None
     tgt_lines, tgt_content, tgt_attribute = list(zip(
-        *[extract_attributes(line, post_attr, post_attr, config['data']['ngram_range']) for line in tgt_lines]
+        *[extract_attributes(line, post_attr, post_attr, config['data']['ngram_range'], config['data']['noise']) for line in tgt_lines]
     ))
     tgt_tok2id, tgt_id2tok = build_vocab_maps(config['data']['tgt_vocab'])
     # train time: just pick attributes that are close to the current (using word distance)
@@ -281,20 +299,27 @@ def get_minibatch(lines, tok2id, index, batch_size, max_len, sort=False, idx=Non
     return input_lines, output_lines, lens, mask, idx
 
 
-def minibatch(src, tgt, idx, batch_size, max_len, model_type, is_test=False):
+def minibatch(src, tgt, idx, batch_size, max_len, model_type, noise_config, is_test=False):
+
+    # delete_retrieve model is not supported with noise_config bc no concept of attributes
+    if noise_config and model_type == 'delete_retrieve':
+        raise Exception('Delete_Retrieve model is not supported with noise corrpution model')
+
     if not is_test:
         use_src = random.random() < 0.5
         in_dataset = src if use_src else tgt
         out_dataset = in_dataset
         attribute_id = 0 if use_src else 1
+        input_text = 'content'
     else:
         in_dataset = src
         out_dataset = tgt
         attribute_id = 1
+        input_text = 'content' if noise_config is None else 'data'
 
     if model_type == 'delete':
         inputs = get_minibatch(
-            in_dataset['content'], in_dataset['tok2id'], idx, batch_size, max_len, sort=True)
+            in_dataset[input_text], in_dataset['tok2id'], idx, batch_size, max_len, sort=True)
         outputs = get_minibatch(
             out_dataset['data'], out_dataset['tok2id'], idx, batch_size, max_len, idx=inputs[-1])
 
