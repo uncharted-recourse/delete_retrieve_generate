@@ -97,7 +97,7 @@ def extract_attributes(line, attribute_vocab, use_ngrams=False, ngram_range = 5,
         content = [tok for _, tok in sorted(zip(q,content))]
         
         # don't need attributes if using noise model
-        attributes = None
+        attribute_markers = ""
 
     elif use_ngrams:
         # generate all ngrams for the sentence

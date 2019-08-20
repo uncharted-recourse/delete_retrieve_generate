@@ -129,6 +129,7 @@ def decode_dataset(model, src, tgt, config):
             config['data']['batch_size'], 
             config['data']['max_len'], 
             config['model']['model_type'],
+            config['data']['noise'],
             is_test=True)
         input_lines_src, output_lines_src, srclens, srcmask, indices = input_content
         input_ids_aux, _, auxlens, auxmask, _ = input_aux
@@ -205,6 +206,7 @@ def evaluate_lpp(model, src, tgt, config):
             config['data']['batch_size'], 
             config['data']['max_len'], 
             config['model']['model_type'],
+            config['data']['noise'],
             is_test=True)
         input_lines_src, _, srclens, srcmask, _ = input_content
         input_ids_aux, _, auxlens, auxmask, _ = input_aux

@@ -158,7 +158,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         batch_idx = i / batch_size
 
         input_content, input_aux, output = data.minibatch(
-            src, tgt, i, batch_size, max_length, config['model']['model_type'])
+            src, tgt, i, batch_size, max_length, config['model']['model_type'], config['data']['noise'])
         input_lines_src, _, srclens, srcmask, _ = input_content
         input_ids_aux, _, auxlens, auxmask, _ = input_aux
         input_lines_tgt, output_lines_tgt, _, _, _ = output
