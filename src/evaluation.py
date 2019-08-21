@@ -2,7 +2,7 @@ import math
 import numpy as np
 import sys
 from collections import Counter
-
+from typing import List
 import torch
 from torch.autograd import Variable
 import torch.nn as nn
@@ -144,7 +144,7 @@ def decode_dataset(model, src, tgt, config):
         elif config['model']['decode'] == 'beam_search':
             l = len(srclens)
             tgt_pred = [beam_search_decode(
-                model, i, i_l, i_m, a, a_l, a_m
+                model, i, i_l, i_m, a, a_l, a_m,
                 tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
                 config['data']['max_len'], config['model']['beam_width']) for 
                 i, i_l, i_m, a, a_l, a_m in zip(input_lines_src.split(l), srclens, srcmask.split(l),
@@ -152,7 +152,7 @@ def decode_dataset(model, src, tgt, config):
         elif config['model']['decode'] == 'top_k':
             l = len(srclens)
             tgt_pred = [top_k_decode(
-                model, i, i_l, i_m, a, a_l, a_m
+                model, i, i_l, i_m, a, a_l, a_m,
                 tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
                 config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
                 i, i_l, i_m, a, a_l, a_m in zip(input_lines_src.split(l), srclens, srcmask.split(l),
@@ -323,8 +323,7 @@ def sample_softmax(logits, temperature=1.0, num_samples=1):
     exps = np.exp((logits - np.max(logits)) / temperature)
     probs = exps / np.sum(exps)
     return np.random.multinomial(num_samples, probs, 1)
-​
-​
+
 def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen, 
                         aux_input, auxmask, auxlen):
     if CUDA:
@@ -332,7 +331,6 @@ def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen,
     decoder_logit, word_probs = model(src_input, tgt_input, srcmask, srclen,
         aux_input, auxmask, auxlen)
     return decoder_logit.contiguous().narrow(0, len(tgt_input) - 1, 1).view(-1)
-​
 
 def top_k_decode(
     model: nn.Module,
@@ -342,9 +340,9 @@ def top_k_decode(
     input_aux: List[int] = None,
     auxlen: int = None,
     auxmask: List[int] = None,
-    start_id: int,
-    stop_id: int,
-    max_seq_length: int,
+    start_id: int = None,
+    stop_id: int = None,
+    max_seq_length: int = 50,
     k: int = 10,
     temperature=1.0,
     init_prefix=None,
@@ -397,7 +395,6 @@ def top_k_decode(
         assert len(output_seqs) == num_return
         return output_seqs
 
-​
 class Beam(object):
     def __init__(self, beam_width):
         self.heap = list()
@@ -410,8 +407,7 @@ class Beam(object):
 
     def __iter__(self):
         return iter(self.heap)
-​
-​
+
 def beam_search_decode(
     model: nn.Module,
     input_src: List[int] = None,
@@ -420,16 +416,16 @@ def beam_search_decode(
     input_aux: List[int] = None,
     auxlen: int = None,
     auxmask: List[int] = None,
-    start_id: int,
-    stop_id: int,
-    max_seq_length: int,
+    start_id: int = None,
+    stop_id: int = None,
+    max_seq_length: int = 50,
     beam_width: int = 10,
     init_prefix=None,
     num_return = 1,
     return_scores = False
 ):
     """ Beam search decoding method 
-​
+    
     Arguments:
         input_seq {List(int)} -- [Input sequence of integers]
     
@@ -440,14 +436,14 @@ def beam_search_decode(
         [(float, list[int])] -- sorted list of (score, sequence) pairs
         
     """
-​
+    
     num_return = num_return or beam_width
     prev_beam = Beam(beam_width)
     
     # check whether 1d / 2d tensor is sufficient for model forward
 
     if init_prefix:
-        prev_beam.add(1.0, False, Variable(torch.LongTensor(init_prefix))
+        prev_beam.add(1.0, False, Variable(torch.LongTensor(init_prefix)))
     else:
         #prev_beam.add(1.0, False, Variable(torch.LongTensor([[start_id]])))
         prev_beam.add(1.0, False, Variable(torch.LongTensor([start_id])))
