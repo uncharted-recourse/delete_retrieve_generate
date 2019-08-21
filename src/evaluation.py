@@ -142,10 +142,6 @@ def decode_dataset(model, src, tgt, config):
                 model, input_lines_src, srclens, srcmask,
                 input_ids_aux, auxlens, auxmask)
         elif config['model']['decode'] == 'beam_search':
-            print(f'input lines: {input_lines_src.size()}')
-            print(f'attrs: {input_ids_aux.size()}')
-            input_ids_aux = input_ids_aux.unsqueeze(1)
-            print(f'attrs: {input_ids_aux.size()}')
             if config['model']['model_type'] == 'delete_retrieve':
                 tgt_pred = [beam_search_decode(
                     model, i, [i_l], i_m, a, [a_l], a_m,
@@ -154,6 +150,7 @@ def decode_dataset(model, src, tgt, config):
                     i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
                     input_ids_aux, auxlens, auxmask)]
             elif config['model']['model_type'] == 'delete':
+                input_ids_aux = input_ids_aux.unsqueeze(1)
                 tgt_pred = [beam_search_decode(
                     model, i, [i_l], i_m, a, None, None,
                     tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
@@ -161,21 +158,21 @@ def decode_dataset(model, src, tgt, config):
                     i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
                     input_ids_aux)]
         elif config['model']['decode'] == 'top_k':
-            l = len(srclens)
             if config['model']['model_type'] == 'delete_retrieve':
                 tgt_pred = [top_k_decode(
-                    model, i, [i_l], i_m, a, a_l, a_m,
+                    model, i, [i_l], i_m, a, [a_l], a_m,
                     tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
                     config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
-                    i, i_l, i_m, a, a_l, a_m in zip(input_lines_src.split(l), srclens, srcmask.split(l),
-                    input_ids_aux.split(l), auxlens, auxmask.split(l))]
+                    i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
+                    input_ids_aux, auxlens, auxmask)]
             elif config['model']['model_type'] == 'delete':
+                input_ids_aux = input_ids_aux.unsqueeze(1)
                 tgt_pred = [top_k_decode(
-                    model, i, i_l, i_m, a, None, None,
+                    model, i, [i_l], i_m, a, None, None,
                     tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
                     config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
-                    i, i_l, i_m, a in zip(input_lines_src.split(l), srclens, srcmask.split(l),
-                    input_ids_aux.split(l))]
+                    i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
+                    input_ids_aux)]
         else:
             raise Exception('Decoding method must be one of greedy, beam_search, top_k')
 
@@ -346,14 +343,14 @@ def sample_softmax(logits, temperature=1.0, num_samples=1):
 def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen, 
                         aux_input, auxmask, auxlen):
     
+    # get tensors in correct shape for prediction
     src_input = src_input.unsqueeze(0)
     tgt_input = tgt_input.unsqueeze(0)
     srcmask = srcmask.unsqueeze(0)
     if auxmask is not None:
         auxmask = auxmask.unsqueeze(0)
-    print(f'input: {src_input.size()}')
-    print(f'tgt input: {tgt_input.size()}')
-    print(f'attr input: {aux_input.size()}')
+    
+    # put on gpu if available
     if CUDA:
         tgt_input = tgt_input.cuda()
         src_input = src_input.cuda()
@@ -361,6 +358,8 @@ def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen,
         aux_input = aux_input.cuda()
         if auxmask is not None:
             auxmask = auxmask.cuda()
+
+    # generate logits from decoder
     decoder_logit, word_probs = model(src_input, tgt_input, srcmask, srclen,
         aux_input, auxmask, auxlen)
     return decoder_logit.contiguous().narrow(0, len(tgt_input) - 1, 1).view(-1)
@@ -498,7 +497,7 @@ def beam_search_decode(
                     score = prefix_score + next_score
                     # new_prefix = torch.cat((prefix, next_id), dim=1)
                     #now_complete = next_id == stop_id or new_prefix.size()[1] >= max_seq_length
-                    new_prefix = torch.cat((prefix, next_id), dim=0)
+                    new_prefix = torch.cat((prefix, Variable(torch.LongTensor([next_id]))), dim=0)
                     now_complete = next_id == stop_id or new_prefix.size()[0] >= max_seq_length
                     curr_beam.add(score, now_complete, new_prefix)
         
