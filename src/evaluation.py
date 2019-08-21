@@ -143,20 +143,36 @@ def decode_dataset(model, src, tgt, config):
                 input_ids_aux, auxlens, auxmask)
         elif config['model']['decode'] == 'beam_search':
             l = len(srclens)
-            tgt_pred = [beam_search_decode(
-                model, i, i_l, i_m, a, a_l, a_m,
-                tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
-                config['data']['max_len'], config['model']['beam_width']) for 
-                i, i_l, i_m, a, a_l, a_m in zip(input_lines_src.split(l), srclens, srcmask.split(l),
-                input_ids_aux.split(l), auxlens, auxmask.split(l))]
+            if config['model']['model_type'] == 'delete_retrieve':
+                tgt_pred = [beam_search_decode(
+                    model, i, i_l, i_m, a, a_l, a_m,
+                    tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
+                    config['data']['max_len'], config['model']['beam_width']) for 
+                    i, i_l, i_m, a, a_l, a_m in zip(input_lines_src.split(l), srclens, srcmask.split(l),
+                    input_ids_aux.split(l), auxlens, auxmask.split(l))]
+            elif config['model']['model_type'] == 'delete':
+                tgt_pred = [beam_search_decode(
+                    model, i, i_l, i_m, a, None, None,
+                    tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
+                    config['data']['max_len'], config['model']['beam_width']) for 
+                    i, i_l, i_m, a in zip(input_lines_src.split(l), srclens, srcmask.split(l),
+                    input_ids_aux.split(l))]
         elif config['model']['decode'] == 'top_k':
             l = len(srclens)
-            tgt_pred = [top_k_decode(
-                model, i, i_l, i_m, a, a_l, a_m,
-                tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
-                config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
-                i, i_l, i_m, a, a_l, a_m in zip(input_lines_src.split(l), srclens, srcmask.split(l),
-                input_ids_aux.split(l), auxlens, auxmask.split(l))]
+            if config['model']['model_type'] == 'delete_retrieve':
+                tgt_pred = [top_k_decode(
+                    model, i, i_l, i_m, a, a_l, a_m,
+                    tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
+                    config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
+                    i, i_l, i_m, a, a_l, a_m in zip(input_lines_src.split(l), srclens, srcmask.split(l),
+                    input_ids_aux.split(l), auxlens, auxmask.split(l))]
+            elif config['model']['model_type'] == 'delete':
+                tgt_pred = [top_k_decode(
+                    model, i, i_l, i_m, a, None, None,
+                    tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
+                    config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
+                    i, i_l, i_m, a in zip(input_lines_src.split(l), srclens, srcmask.split(l),
+                    input_ids_aux.split(l))]
         else:
             raise Exception('Decoding method must be one of greedy, beam_search, top_k')
 
