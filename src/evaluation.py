@@ -150,13 +150,15 @@ def decode_dataset(model, src, tgt, config):
                     i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
                     input_ids_aux, auxlens, auxmask)]
             elif config['model']['model_type'] == 'delete':
+                start_time = time.time()
                 input_ids_aux = input_ids_aux.unsqueeze(1)
-                tgt_pred = [beam_search_decode(
+                tgt_pred = torch.stack([beam_search_decode(
                     model, i, [i_l], i_m, a, None, None,
                     tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
                     config['data']['max_len'], config['model']['beam_width']) for 
                     i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
-                    input_ids_aux)]
+                    input_ids_aux)])
+                print(f'beam search took: {time.time() - start_time}')
         elif config['model']['decode'] == 'top_k':
             if config['model']['model_type'] == 'delete_retrieve':
                 tgt_pred = [top_k_decode(
@@ -349,20 +351,13 @@ def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen,
     srcmask = srcmask.unsqueeze(0)
     if auxmask is not None:
         auxmask = auxmask.unsqueeze(0)
-    
-    # put on gpu if available
-    if CUDA:
-        tgt_input = tgt_input.cuda()
-        src_input = src_input.cuda()
-        srcmask = srcmask.cuda()
-        aux_input = aux_input.cuda()
-        if auxmask is not None:
-            auxmask = auxmask.cuda()
-
-    # generate logits from decoder
+    #print(f'input: {src_input}')
+    #print(f'target: {tgt_input}')
+    #print(f'input mask: {srcmask}')    
+    #print(f'input len: {srclen}')
     decoder_logit, word_probs = model(src_input, tgt_input, srcmask, srclen,
         aux_input, auxmask, auxlen)
-    return decoder_logit.contiguous().narrow(0, len(tgt_input) - 1, 1).view(-1)
+    return decoder_logit[0, tgt_input.size()[1] - 1, :]
 
 def top_k_decode(
     model: nn.Module,
@@ -381,7 +376,7 @@ def top_k_decode(
     num_return=1,
     return_scores=False,
 ):
-    init_seq = Variable(torch.LongTensor(init_prefix)) if init_prefix else Variable(torch.LongTensor([start_id]))
+    init_seq = torch.tensor(init_prefix) if init_prefix else torch.tensor([start_id])
     output_seqs = []
     for _ in range(num_return):
         generated_seq = init_seq
@@ -433,10 +428,17 @@ class Beam(object):
         self.beam_width = beam_width
 
     def add(self, score, complete, prefix):
-        heapq.heappush(self.heap, (score, complete, prefix))
+        try:
+            heapq.heappush(self.heap, (score, complete, prefix))
+        except RuntimeError:
+            print(f'Heap push failed')
+            print(f'score: {score}')
+            print(f'complete: {complete}')
+            print(f'prefix size: {prefix.size()}')
+            print(f'prefix: {prefix}')
         if len(self.heap) > self.beam_width:
             heapq.heappop(self.heap)
-
+       
     def __iter__(self):
         return iter(self.heap)
 
@@ -468,17 +470,17 @@ def beam_search_decode(
         [(float, list[int])] -- sorted list of (score, sequence) pairs
         
     """
-    
+    start_time = time.time()
     num_return = num_return or beam_width
     prev_beam = Beam(beam_width)
     
     # check whether 1d / 2d tensor is sufficient for model forward
 
     if init_prefix:
-        prev_beam.add(1.0, False, Variable(torch.LongTensor(init_prefix)))
+        prev_beam.add(1.0, False, torch.LongTensor(init_prefix))
     else:
         #prev_beam.add(1.0, False, Variable(torch.LongTensor([[start_id]])))
-        prev_beam.add(1.0, False, Variable(torch.LongTensor([start_id])))
+        prev_beam.add(1.0, False, torch.LongTensor([start_id]))
     while True:
         curr_beam = Beam(beam_width)
         
@@ -494,17 +496,23 @@ def beam_search_decode(
                 )
                 for next_id, next_score in enumerate(next_token_scores):
                     # prefix_prob * next_prob in log space
+                    #print(f'prefix score: {prefix_score}')
+                    #print(f'next score: {next_score}')
                     score = prefix_score + next_score
                     # new_prefix = torch.cat((prefix, next_id), dim=1)
                     #now_complete = next_id == stop_id or new_prefix.size()[1] >= max_seq_length
-                    new_prefix = torch.cat((prefix, Variable(torch.LongTensor([next_id]))), dim=0)
+                    #print(f'prefix: {prefix}')
+                    #print(f'next_id: {next_id}')
+                    new_prefix = torch.cat((prefix, torch.LongTensor([next_id])), dim=0)
+                    #print(f'new prefix: {new_prefix}')
+                    #print(f'size: {new_prefix.size()[0]}')
                     now_complete = next_id == stop_id or new_prefix.size()[0] >= max_seq_length
                     curr_beam.add(score, now_complete, new_prefix)
         
         # if all beams are completed, sort and return (score, seq) pairs
         if all([complete for _, complete, _ in curr_beam]):
             curr_beam = sorted(curr_beam, reverse=True)[:num_return]
-            
+            #print(f'beam search took {time.time() - start_time} seconds')
             if return_scores:
                 generated_seqs = [
                     (score, prefix) for score, complete, prefix in curr_beam
