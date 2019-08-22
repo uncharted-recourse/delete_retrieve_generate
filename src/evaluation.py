@@ -10,6 +10,7 @@ import editdistance
 import heapq
 import src.data as data
 from src.cuda import CUDA
+from callbacks import mean_masked_entropy
 
 import time
 
@@ -251,13 +252,16 @@ def evaluate_lpp(model, src, tgt, config):
             input_lines_src, input_lines_tgt, srcmask, srclens,
             input_ids_aux, auxlens, auxmask)
 
+        # call mean entropy callback and write to tensorboard
+        mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask)
+
         loss = loss_criterion(
             decoder_logit.contiguous().view(-1, len(tgt['tok2id'])),
             output_lines_tgt.view(-1)
         )
         losses.append(loss.item())
 
-    return np.mean(losses)
+    return np.mean(losses), mean_entropy
 
 def predict_text(text, model, src, tgt, config, forward = True, remove_attributes = True):
 
