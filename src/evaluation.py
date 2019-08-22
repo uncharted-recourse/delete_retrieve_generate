@@ -137,21 +137,23 @@ def decode_dataset(model, src, tgt, config):
         input_lines_tgt, output_lines_tgt, _, _, _ = output
 
         # decode dataset with greedy, beam search, or top k
+        start_time = time.time()
         if config['model']['decode'] == 'greedy':
             tgt_pred = decode_minibatch_greedy(
                 config['data']['max_len'], tgt['tok2id']['<s>'], 
                 model, input_lines_src, srclens, srcmask,
                 input_ids_aux, auxlens, auxmask)
+            log(f'greedy search decoding took: {time.time() - start_time}', level='debug')
         elif config['model']['decode'] == 'beam_search':
+            start_time = time.time()
             if config['model']['model_type'] == 'delete_retrieve':
-                tgt_pred = [beam_search_decode(
+                tgt_pred = torch.stack([beam_search_decode(
                     model, i, [i_l], i_m, a, [a_l], a_m,
                     tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
                     config['data']['max_len'], config['model']['beam_width']) for 
                     i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
-                    input_ids_aux, auxlens, auxmask)]
+                    input_ids_aux, auxlens, auxmask)])
             elif config['model']['model_type'] == 'delete':
-                start_time = time.time()
                 input_ids_aux = input_ids_aux.unsqueeze(1)
                 tgt_pred = torch.stack([beam_search_decode(
                     model, i, [i_l], i_m, a, None, None,
@@ -159,23 +161,24 @@ def decode_dataset(model, src, tgt, config):
                     config['data']['max_len'], config['model']['beam_width']) for 
                     i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
                     input_ids_aux)])
-                print(f'beam search took: {time.time() - start_time}')
+            log(f'beam search decoding took: {time.time() - start_time}', level='debug')
         elif config['model']['decode'] == 'top_k':
             if config['model']['model_type'] == 'delete_retrieve':
-                tgt_pred = [top_k_decode(
+                tgt_pred = torch.stack([top_k_decode(
                     model, i, [i_l], i_m, a, [a_l], a_m,
                     tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
                     config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
                     i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
-                    input_ids_aux, auxlens, auxmask)]
+                    input_ids_aux, auxlens, auxmask)])
             elif config['model']['model_type'] == 'delete':
                 input_ids_aux = input_ids_aux.unsqueeze(1)
-                tgt_pred = [top_k_decode(
+                tgt_pred = torch.stack([top_k_decode(
                     model, i, [i_l], i_m, a, None, None,
                     tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
                     config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
                     i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
-                    input_ids_aux)]
+                    input_ids_aux)])
+            log(f'top k decoding took: {time.time() - start_time}', level='debug')
         else:
             raise Exception('Decoding method must be one of greedy, beam_search, top_k')
 
@@ -432,14 +435,13 @@ class Beam(object):
         self.beam_width = beam_width
 
     def add(self, score, complete, prefix):
-        try:
-            heapq.heappush(self.heap, (score, complete, prefix))
-        except RuntimeError:
-            print(f'Heap push failed')
-            print(f'score: {score}')
-            print(f'complete: {complete}')
-            print(f'prefix size: {prefix.size()}')
-            print(f'prefix: {prefix}')
+        heapq.heappush(self.heap, (score, complete, prefix))
+        # except RuntimeError:
+        #     print(f'Heap push failed')
+        #     print(f'score: {score}')
+        #     print(f'complete: {complete}')
+        #     print(f'prefix size: {prefix.size()}')
+        #     print(f'prefix: {prefix}')
         if len(self.heap) > self.beam_width:
             heapq.heappop(self.heap)
        
@@ -474,16 +476,12 @@ def beam_search_decode(
         [(float, list[int])] -- sorted list of (score, sequence) pairs
         
     """
-    start_time = time.time()
     num_return = num_return or beam_width
     prev_beam = Beam(beam_width)
     
-    # check whether 1d / 2d tensor is sufficient for model forward
-
     if init_prefix:
         prev_beam.add(1.0, False, torch.LongTensor(init_prefix))
     else:
-        #prev_beam.add(1.0, False, Variable(torch.LongTensor([[start_id]])))
         prev_beam.add(1.0, False, torch.LongTensor([start_id]))
     while True:
         curr_beam = Beam(beam_width)
@@ -499,24 +497,14 @@ def beam_search_decode(
                     input_aux, auxmask, auxlen
                 )
                 for next_id, next_score in enumerate(next_token_scores):
-                    # prefix_prob * next_prob in log space
-                    #print(f'prefix score: {prefix_score}')
-                    #print(f'next score: {next_score}')
                     score = prefix_score + next_score
-                    # new_prefix = torch.cat((prefix, next_id), dim=1)
-                    #now_complete = next_id == stop_id or new_prefix.size()[1] >= max_seq_length
-                    #print(f'prefix: {prefix}')
-                    #print(f'next_id: {next_id}')
                     new_prefix = torch.cat((prefix, torch.LongTensor([next_id])), dim=0)
-                    #print(f'new prefix: {new_prefix}')
-                    #print(f'size: {new_prefix.size()[0]}')
                     now_complete = next_id == stop_id or new_prefix.size()[0] >= max_seq_length
                     curr_beam.add(score, now_complete, new_prefix)
         
         # if all beams are completed, sort and return (score, seq) pairs
         if all([complete for _, complete, _ in curr_beam]):
             curr_beam = sorted(curr_beam, reverse=True)[:num_return]
-            #print(f'beam search took {time.time() - start_time} seconds')
             if return_scores:
                 generated_seqs = [
                     (score, prefix) for score, complete, prefix in curr_beam

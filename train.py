@@ -64,6 +64,7 @@ logger = logging.getLogger('')
 logger.addHandler(console)
 logger.setLevel(logging.INFO)
 
+
 logging.info('Reading data ...')
 src, tgt = data.read_nmt_data(
    src=config['data']['src'],
@@ -126,6 +127,9 @@ elif config['training']['optimizer'] == 'sgd':
     optimizer = optim.SGD(model.parameters(), lr=lr)
 else:
     raise NotImplementedError("Learning method not recommend for task")
+
+# reduce learning rate by a factor of 10 after plateau of 10 epochs
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
 
 epoch_loss = []
 start_since_last_report = time.time()
@@ -199,15 +203,20 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
         # NO SAMPLING!! because weird train-vs-test data stuff would be a pain
         STEP += 1
+
     if args.overfit:
         continue
     logging.info('EPOCH %s COMPLETE. EVALUATING...' % epoch)
     start = time.time()
     model.eval()
-    dev_loss = evaluation.evaluate_lpp(
+    dev_loss, mean_entropy = evaluation.evaluate_lpp(
             model, src_test, tgt_test, config)
 
     writer.add_scalar('eval/loss', dev_loss, epoch)
+    writer.add_scalar('stats/mean_entropy', mean_entropy, epoch)
+    for param_group in optimizer.param_groups:
+        writer.add_scalar('stats/lr', param_group['lr'], epoch)
+    scheduler.step(dev_loss)
 
     if args.bleu and epoch >= config['training'].get('inference_start_epoch', 1):
         
