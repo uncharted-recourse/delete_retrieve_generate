@@ -386,10 +386,8 @@ def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen,
     srcmask = srcmask.unsqueeze(0)
     if auxmask is not None:
         auxmask = auxmask.unsqueeze(0)
-    #print(f'input: {src_input}')
-    #print(f'target: {tgt_input}')
-    #print(f'input mask: {srcmask}')    
-    #print(f'input len: {srclen}')
+    if CUDA:
+        tgt_input = tgt_input.cuda()
     decoder_logit, word_probs = model(src_input, tgt_input, srcmask, srclen,
         aux_input, auxmask, auxlen)
     return decoder_logit[0, tgt_input.size()[1] - 1, :]
