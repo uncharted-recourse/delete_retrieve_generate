@@ -136,6 +136,7 @@ def decode_dataset(model, src, tgt, config):
         input_lines_tgt, output_lines_tgt, _, _, _ = output
 
         # decode dataset with greedy, beam search, or top k
+        tokenizer = config['data']['tokenizer']
         start_id = data.get_start_id(tokenizer)
         stop_id = data.get_stop_id(tokenizer)
         start_time = time.time()
@@ -206,22 +207,11 @@ def inference_metrics(model, src, tgt, config):
     bleu = get_bleu(preds, ground_truths)
     edit_distance = get_edit_distance(preds, ground_truths)
 
-    # if encoder included in the config, decode tokens
-    if config['data']['encoder'] is not None:
-        encoder = tfds.features.text.SubwordTextEncoder.load_from_file(config['data']['encoder'])
-        inputs = [[int(s) for s in seq if s.isdigit()] for seq in inputs]
-        preds = [[int(s) for s in seq if s.isdigit()] for seq in preds]
-        ground_truths = [[int(s) for s in seq if s.isdigit()] for seq in ground_truths]
-        auxs = [[int(s) for s in seq if s.isdigit()] for seq in auxs]
-        inputs = [encoder.decode(seq) for seq in inputs]
-        preds = [encoder.decode(seq) for seq in preds]
-        ground_truths = [encoder.decode(seq) for seq in ground_truths]
-        auxs = [encoder.decode(seq) for seq in auxs]
-    else:
-        inputs = [' '.join(seq) for seq in inputs]
-        preds = [' '.join(seq) for seq in preds]
-        ground_truths = [' '.join(seq) for seq in ground_truths]
-        auxs = [' '.join(seq) for seq in auxs]
+    inputs = [' '.join(seq) for seq in inputs]
+    preds = [' '.join(seq) for seq in preds]
+    ground_truths = [' '.join(seq) for seq in ground_truths]
+    auxs = [' '.join(seq) for seq in auxs]
+    
     return bleu, edit_distance, inputs, preds, ground_truths, auxs
 
 

@@ -290,7 +290,7 @@ class FusedSeqModel(SeqModel):
 
         # !! assume that language model and seq2seq are using same tokenization !!
         self.language_model = models[model_name].from_pretrained(model_weights[model_name], 
-            cache_dir=config['data']['working_dir']
+            cache_dir=self.config['data']['working_dir']
         )
 
         # finetune if desired
@@ -315,7 +315,7 @@ class FusedSeqModel(SeqModel):
         
         self.init_weights()
 
-    def init_weights(self):
+    def init_fused_weights(self):
         self.lm_output_projection.bias.data.fill_(0)
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask):
