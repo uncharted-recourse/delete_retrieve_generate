@@ -264,8 +264,8 @@ class FusedSeqModel(SeqModel):
     def __init__(
         self,
         *args,
-        cache_dir = None,
         join_method = 'add',
+        finetune = False,
         **kwargs,
     ):
         """Initialize model."""
@@ -290,10 +290,15 @@ class FusedSeqModel(SeqModel):
 
         # !! assume that language model and seq2seq are using same tokenization !!
         self.language_model = models[model_name].from_pretrained(model_weights[model_name], 
-            cache_dir=cache_dir
+            cache_dir=config['data']['working_dir']
         )
+
+        # finetune if desired
         if CUDA:
             self.language_model = self.language_model.cuda()
+        if not finetune:
+            for param in self.language_model.parameters():
+                param.requires_grad = False
 
         # define layers that join language model and sequence to sequence
         self.lm_output_projection = nn.Linear(
@@ -307,18 +312,16 @@ class FusedSeqModel(SeqModel):
             self.lm_sigmoid = nn.Sigmoid()
         else:
             raise Exception("join method must be 'gate' or 'add'")
+        
+        self.init_weights()
 
     def init_weights(self):
-        super(FusedSeqModel, self).init_weights()
+        self.lm_output_projection.bias.data.fill_(0)
 
-    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, finetune = True):
+    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask):
 
         # generate predictions from language model
-        if finetune:
-            lm_features = self.language_model(input_src)[0]
-        else:
-            with torch.no_grad():
-                lm_features = self.language_model(input_src)[0]
+        lm_features = self.language_model(input_src)[0]
 
         # project language model feature vector to vocabulary size
         lm_logit = self.lm_output_projection(lm_features)

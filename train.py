@@ -110,7 +110,6 @@ model = models.FusedSeqModel(
    pad_id_src=padding_id,
    pad_id_tgt=padding_id,
    config=config,
-   cache_dir=vocab_dir
 )
 trainable, untrainable = model.count_params()
 logging.info(f'MODEL HAS {trainable} trainable params and {untrainable} untrainable params')
