@@ -136,7 +136,7 @@ def decode_dataset(model, src, tgt, config):
         input_lines_tgt, output_lines_tgt, _, _, _ = output
 
         # decode dataset with greedy, beam search, or top k
-        tokenizer = config['data']['tokenizer']
+        tokenizer = src['tokenizer']
         start_id = data.get_start_id(tokenizer)
         stop_id = data.get_stop_id(tokenizer)
         start_time = time.time()
@@ -185,14 +185,14 @@ def decode_dataset(model, src, tgt, config):
             raise Exception('Decoding method must be one of greedy, beam_search, top_k')
 
         # convert inputs/preds/targets/aux to human-readable form
-        inputs += ids_to_toks(output_lines_src, src['tokenizer'], indices=indices)
-        preds += ids_to_toks(tgt_pred, src['tokenizer'], indices=indices)
-        ground_truths += ids_to_toks(output_lines_tgt, src['tokenizer'], indices=indices)
+        inputs += ids_to_toks(output_lines_src, tokenizer, indices=indices)
+        preds += ids_to_toks(tgt_pred, tokenizer, indices=indices)
+        ground_truths += ids_to_toks(output_lines_tgt, tokenizer, indices=indices)
         
         if config['model']['model_type'] == 'delete':
             auxs += [[str(x)] for x in input_ids_aux.data.cpu().numpy()] # because of list comp in inference_metrics()
         elif config['model']['model_type'] == 'delete_retrieve':
-            auxs += ids_to_toks(input_ids_aux, tgt['tokenizer'], indices = indices)
+            auxs += ids_to_toks(input_ids_aux, tokenizer, indices = indices)
         elif config['model']['model_type'] == 'seq2seq':
             auxs += ['None' for _ in range(len(tgt_pred))]
 
@@ -211,7 +211,7 @@ def inference_metrics(model, src, tgt, config):
     preds = [' '.join(seq) for seq in preds]
     ground_truths = [' '.join(seq) for seq in ground_truths]
     auxs = [' '.join(seq) for seq in auxs]
-    
+
     return bleu, edit_distance, inputs, preds, ground_truths, auxs
 
 
@@ -265,7 +265,7 @@ def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True
     start_time = time.time()
 
     # tokenize input data using cached tokenizer and attribute vocab
-    tokenized_text = data.encode_text_data([text],
+    tokenized_text, tokenizer = data.encode_text_data([text],
         encoder = config['data']['tokenizer'], 
         cache_dir=cache_dir
     )
@@ -369,7 +369,7 @@ def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True
 
     # convert tokens to text
     preds = []
-    preds += ids_to_toks(tgt_pred, tgt['tokenizer'], sort=False)
+    preds += ids_to_toks(tgt_pred, tokenizer, sort=False)
     return ' '.join(preds[0])
 
 def sample_softmax(logits, temperature=1.0, num_samples=1):

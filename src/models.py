@@ -306,9 +306,10 @@ class FusedSeqModel(SeqModel):
             self.tgt_vocab_size)
 
         # join language model and s2s model
-        if join_method == "add":
+        self.join_method = join_method
+        if self.join_method == "add":
             self.multp = nn.Parameter(torch.rand(1))
-        elif join_method == "gate":
+        elif self.join_method == "gate":
             self.lm_sigmoid = nn.Sigmoid()
         else:
             raise Exception("join method must be 'gate' or 'add'")
@@ -336,9 +337,9 @@ class FusedSeqModel(SeqModel):
             attrmask)
         
         # add or multiply projected logits
-        if join_method == "add":
+        if self.join_method == "add":
             combined_logit = s2s_logit.add(lm_logit * self.multp)
-        elif join_method == 'gate':
+        elif self.join_method == 'gate':
             combined_logit = s2s_logit * self.lm_sigmoid(lm_logit)
 
         probs = self.softmax(combined_logit)
