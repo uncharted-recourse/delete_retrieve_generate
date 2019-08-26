@@ -10,14 +10,13 @@ import editdistance
 import heapq
 import src.data as data
 from src.cuda import CUDA
-from callbacks import mean_masked_entropy
+from src.callbacks import mean_masked_entropy
 
 import time
 
 import os
 import logging
 from utils.log_func import get_log_func
-import tensorflow_datasets as tfds
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -98,13 +97,13 @@ def decode_minibatch_greedy(max_len, start_id, model, src_input, srclens, srcmas
     return tgt_input
 
 # convert seqs to tokens
-def ids_to_toks(tok_seqs, id2tok, sort = True, indices = None):
+def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     out = []
     # take off the gpu
     tok_seqs = tok_seqs.cpu().numpy()
     # convert to toks, cut off at </s>, delete any start tokens (preds were kickstarted w them)
     for line in tok_seqs:
-        toks = [id2tok[x] for x in line]
+        toks = tokenizer.convert_ids_to_tokens(line)
         if '<s>' in toks: 
             toks.remove('<s>')
         cut_idx = toks.index('</s>') if '</s>' in toks else len(toks)
@@ -137,10 +136,12 @@ def decode_dataset(model, src, tgt, config):
         input_lines_tgt, output_lines_tgt, _, _, _ = output
 
         # decode dataset with greedy, beam search, or top k
+        start_id = data.get_start_id(tokenizer)
+        stop_id = data.get_stop_id(tokenizer)
         start_time = time.time()
         if config['model']['decode'] == 'greedy':
             tgt_pred = decode_minibatch_greedy(
-                config['data']['max_len'], tgt['tok2id']['<s>'], 
+                config['data']['max_len'], start_id, 
                 model, input_lines_src, srclens, srcmask,
                 input_ids_aux, auxlens, auxmask)
             log(f'greedy search decoding took: {time.time() - start_time}', level='debug')
@@ -149,7 +150,7 @@ def decode_dataset(model, src, tgt, config):
             if config['model']['model_type'] == 'delete_retrieve':
                 tgt_pred = torch.stack([beam_search_decode(
                     model, i, [i_l], i_m, a, [a_l], a_m,
-                    tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
+                    start_id, stop_id,
                     config['data']['max_len'], config['model']['beam_width']) for 
                     i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
                     input_ids_aux, auxlens, auxmask)])
@@ -157,7 +158,7 @@ def decode_dataset(model, src, tgt, config):
                 input_ids_aux = input_ids_aux.unsqueeze(1)
                 tgt_pred = torch.stack([beam_search_decode(
                     model, i, [i_l], i_m, a, None, None,
-                    tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
+                    start_id, stop_id,
                     config['data']['max_len'], config['model']['beam_width']) for 
                     i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
                     input_ids_aux)])
@@ -166,7 +167,7 @@ def decode_dataset(model, src, tgt, config):
             if config['model']['model_type'] == 'delete_retrieve':
                 tgt_pred = torch.stack([top_k_decode(
                     model, i, [i_l], i_m, a, [a_l], a_m,
-                    tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
+                    start_id, stop_id,
                     config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
                     i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
                     input_ids_aux, auxlens, auxmask)])
@@ -174,7 +175,7 @@ def decode_dataset(model, src, tgt, config):
                 input_ids_aux = input_ids_aux.unsqueeze(1)
                 tgt_pred = torch.stack([top_k_decode(
                     model, i, [i_l], i_m, a, None, None,
-                    tgt['tok2id']['<s>'], tgt['tok2id']['</s>'],
+                    start_id, stop_id,
                     config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
                     i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
                     input_ids_aux)])
@@ -183,14 +184,14 @@ def decode_dataset(model, src, tgt, config):
             raise Exception('Decoding method must be one of greedy, beam_search, top_k')
 
         # convert inputs/preds/targets/aux to human-readable form
-        inputs += ids_to_toks(output_lines_src, src['id2tok'], indices=indices)
-        preds += ids_to_toks(tgt_pred, tgt['id2tok'], indices=indices)
-        ground_truths += ids_to_toks(output_lines_tgt, tgt['id2tok'], indices=indices)
+        inputs += ids_to_toks(output_lines_src, src['tokenizer'], indices=indices)
+        preds += ids_to_toks(tgt_pred, src['tokenizer'], indices=indices)
+        ground_truths += ids_to_toks(output_lines_tgt, src['tokenizer'], indices=indices)
         
         if config['model']['model_type'] == 'delete':
             auxs += [[str(x)] for x in input_ids_aux.data.cpu().numpy()] # because of list comp in inference_metrics()
         elif config['model']['model_type'] == 'delete_retrieve':
-            auxs += ids_to_toks(input_ids_aux, tgt['id2tok'], indices = indices)
+            auxs += ids_to_toks(input_ids_aux, tgt['tokenizer'], indices = indices)
         elif config['model']['model_type'] == 'seq2seq':
             auxs += ['None' for _ in range(len(tgt_pred))]
 
@@ -228,10 +229,11 @@ def evaluate_lpp(model, src, tgt, config):
     """ evaluate log perplexity WITHOUT decoding
         (i.e., with teacher forcing)
     """
-    weight_mask = torch.ones(len(tgt['tok2id']))
+    weight_mask = torch.ones(len(tgt['tokenizer']))
     if CUDA:
         weight_mask = weight_mask.cuda()
-    weight_mask[tgt['tok2id']['<pad>']] = 0
+    padding_id = data.get_padding_id(src['tokenizer'])
+    weight_mask[padding_id] = 0
     loss_criterion = nn.CrossEntropyLoss(weight=weight_mask)
     if CUDA:
         loss_criterion = loss_criterion.cuda()
@@ -258,41 +260,45 @@ def evaluate_lpp(model, src, tgt, config):
             input_ids_aux, auxlens, auxmask)
 
         # call mean entropy callback and write to tensorboard
-        mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask)
+        mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
 
         loss = loss_criterion(
-            decoder_logit.contiguous().view(-1, len(tgt['tok2id'])),
+            decoder_logit.contiguous().view(-1, len(tgt['tokenizer'])),
             output_lines_tgt.view(-1)
         )
         losses.append(loss.item())
 
     return np.mean(losses), mean_entropy
 
-def predict_text(text, model, src, tgt, config, forward = True, remove_attributes = True):
+def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True, remove_attributes = True):
 
     start_time = time.time()
-    input_data = text.strip().lower()
-    # encode input data if necessary 
-    if config['data']['encoder'] is not None:
-        encoder = tfds.features.text.SubwordTextEncoder.load_from_file(config['data']['encoder'])
-        input_data = [[str(e) for e in encoder.encode(input_data)]]
+
+    # tokenize input data using cached tokenizer and attribute vocab
+    tokenized_text = data.encode_text_data([text],
+        encoder = config['data']['tokenizer'], 
+        cache_dir=cache_dir
+    )
+    if forward:
+        attr_path = os.path.join(cache_dir, 'pre_attribute_vocab.pkl')
     else:
-        input_data = [input_data.split()]
-    
-    # remove attributes from input text
+        attr_path = os.path.join(cache_dir, 'post_attribute_vocab.pkl')
+    attr = pickle.load(open(attr_path, "rb"))
+
     if remove_attributes:
         src_lines, src_content, src_attribute = list(zip(
-            *[data.extract_attributes(line, src['attr'], src['attr'], config['data']['ngram_range']) for line in input_data]
+            *[data.extract_attributes(line, attr, config['data']['noise'], config['data']['dropout_prob'],
+                config['data']['ngram_range'], config['data']['permutation']) for line in tokenized_text]
         ))
-        input_data = src_content
-
+    
     # convert content to tokens
     max_len = config['data']['max_len']
-    tok2id = src['tok2id']
-    lines = [['<s>'] + l[:max_len] + ['</s>'] for l in input_data]
+    start_id = data.get_start_id(tokenizer)
+    stop_id = data.get_stop_id(tokenizer)
+    lines = [[start_id] + l[:max_len] + [stop_id] for l in input_data]
     content_length = [len(l) - 1 for l in lines]
     content_mask = [([1] * l) for l in content_length]
-    content = [[tok2id.get(w, tok2id['<unk>']) for w in l[:-1]] for l in lines]
+    content = [[int(w) for w in l[:-1]] for l in lines]
 
     # convert attributes to tokens or binary variables
     attributes_len = None
@@ -302,13 +308,19 @@ def predict_text(text, model, src, tgt, config, forward = True, remove_attribute
             attributes = [1]
         else:
             attributes = [0]
-    else:
-        attributes = data.sample_replace(lines, tgt['dist_measurer'], 1.0, 0)
-        attributes = [[tok2id.get(w, tok2id['<unk>']) for w in l[:-1]] for l in attributes]
+    elif config['model']['model_type'] == 'delete_retrieve':
+        if forward:
+            attributes = data.sample_replace(lines, tgt['dist_measurer'], 1.0, 0)
+        else:
+            attributes = data.sample_replace(lines, src['dist_measurer'], 1.0, 0)
+        attributes = [[int(w) for w in l[:-1]] for l in attributes]
         attributes_len = [len(l) - 1 for l in attributes]
         attributes_mask = [([1] * l) for l in attributes_len]
         attributes_mask = Variable(torch.LongTensor(attributes_mask))
+    else:
+        raise Exception('Currently only "delete" and "delete_retrieve" models are supported for predict_text()')
     log(f'time for tokenization: {time.time() - start_time}', level='debug')
+    
     # convert to torch objects for prediction
     content = Variable(torch.LongTensor(content))
     content_mask = Variable(torch.FloatTensor(content_mask))
@@ -322,27 +334,53 @@ def predict_text(text, model, src, tgt, config, forward = True, remove_attribute
 
     # make predictions
     model.eval()
-    tgt_pred = decode_minibatch_greedy(
-        max_len, tgt['tok2id']['<s>'], 
-        model, content, content_length, content_mask,
-        attributes, attributes_len, attributes_mask
-    )
+    if config['model']['decode'] == 'greedy':
+        tgt_pred = decode_minibatch_greedy(
+            max_len, start_id, 
+            model, content, content_length, content_mask,
+            attributes, attributes_len, attributes_mask
+        )
+    elif config['model']['decode'] == 'beam_search':
+        start_time = time.time()
+        if config['model']['model_type'] == 'delete_retrieve':
+            tgt_pred = torch.stack([beam_search_decode(
+                model, i, [i_l], i_m, a, [a_l], a_m,
+                start_id, stop_id,
+                max_len, config['model']['beam_width']) for 
+                i, i_l, i_m, a, a_l, a_m in zip(content, content_length, content_mask,
+                attributes, attributes_len, attributes_mask)])
+        elif config['model']['model_type'] == 'delete':
+            input_ids_aux = input_ids_aux.unsqueeze(1)
+            tgt_pred = torch.stack([beam_search_decode(
+                model, i, [i_l], i_m, a, None, None,
+                start_id, stop_id,
+                max_len, config['model']['beam_width']) for 
+                i, i_l, i_m, a in zip(content, content_length, content_mask,
+                attributes)])
+        log(f'beam search decoding took: {time.time() - start_time}', level='debug')
+    elif config['model']['decode'] == 'top_k':
+        if config['model']['model_type'] == 'delete_retrieve':
+            tgt_pred = torch.stack([top_k_decode(
+                model, i, [i_l], i_m, a, [a_l], a_m,
+                start_id, stop_id,
+                max_len, config['model']['k'], config['model']['temperature']) for 
+                i, i_l, i_m, a, a_l, a_m in zip(content, content_length, content_mask,
+                attributes, attributes_len, attributes_mask)])
+        elif config['model']['model_type'] == 'delete':
+            input_ids_aux = input_ids_aux.unsqueeze(1)
+            tgt_pred = torch.stack([top_k_decode(
+                model, i, [i_l], i_m, a, None, None,
+                start_id, stop_id,
+                max_len, config['model']['k'], config['model']['temperature']) for 
+                i, i_l, i_m, a in zip(content, content_length, content_mask,
+                attributes)])
+        log(f'top k decoding took: {time.time() - start_time}', level='debug')
     log(f'time for predictions: {time.time() - start_time}', level='debug')
 
     # convert tokens to text
     preds = []
-    preds += ids_to_toks(tgt_pred, tgt['id2tok'], sort=False)
-
-    # if encoder included in the config, decode tokens
-    if config['data']['encoder'] is not None:
-        preds = [int(s) for s in preds[0] if s.isdigit()]
-        preds = encoder.decode(preds)
-    else:
-        preds = ' '.join(preds[0])
-
-    log(f'time for decoding: {time.time() - start_time}', level='debug')
-
-    return preds
+    preds += ids_to_toks(tgt_pred, tgt['tokenizer'], sort=False)
+    return ' '.join(preds[0])
 
 def sample_softmax(logits, temperature=1.0, num_samples=1):
     exps = np.exp((logits - np.max(logits)) / temperature)
@@ -390,7 +428,7 @@ def top_k_decode(
         total_score = 0
         
         # exit condition: either hit max length or find stop character
-        while (generated_seq[-1] != stop_id) and (generated_seq.size()[0] < seq_length):
+        while (generated_seq[-1] != stop_id) and (generated_seq.size()[0] < max_seq_length):
             next_token_scores = get_next_token_scores(
                 model, input_src, generated_seq, srcmask, srclen, 
                 input_aux, auxmask, auxlen

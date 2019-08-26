@@ -39,7 +39,9 @@ parser.add_argument(
 args = parser.parse_args()
 config = json.load(open(args.config, 'r'))
 
-working_dir = config['data']['working_dir']
+# save all checkpoint folders to checkpoint dir
+working_dir = os.path.join("checkpoints", config['data']['working_dir'])
+vocab_dir = os.path.join("checkpoints", config['data']['vocab_dir'])
 
 if not os.path.exists(working_dir):
     os.makedirs(working_dir)
@@ -57,42 +59,43 @@ logging.basicConfig(
 )
 
 console = logging.StreamHandler()
-console.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console.setFormatter(formatter)
+filelog = logging.FileHandler('%s/train_log' % working_dir)
+filelog.setFormatter(formatter)
 logger = logging.getLogger('')
 logger.addHandler(console)
+logger.addHandler(filelog)
 logger.setLevel(logging.INFO)
 
-
 logging.info('Reading data ...')
+input_lines_src = [l for l in open(config['data']['src'], 'r')]
+input_lines_tgt = [l for l in open(config['data']['tgt'], 'r')]
+
 src, tgt = data.read_nmt_data(
-   src=config['data']['src'],
+   src_lines=input_lines_src,
+   tgt_lines=input_lines_tgt,
    config=config,
-   tgt=config['data']['tgt'],
-   attribute_vocab=config['data']['attribute_vocab'],
-   ngram_attributes=config['data']['ngram_attributes']
+   cache_dir=vocab_dir
 )
 
 src_test, tgt_test = data.read_nmt_data(
-    src=config['data']['src_test'],
+    src_lines=config['data']['src_test'],
+    tgt_lines=config['data']['tgt_test'],
     config=config,
-    tgt=config['data']['tgt_test'],
-    attribute_vocab=config['data']['attribute_vocab'],
-    ngram_attributes=config['data']['ngram_attributes'],
     train_src=True,
-    train_tgt=tgt
+    train_tgt=tgt,
+    cache_dir=vocab_dir
 )
 logging.info('...done!')
 
 batch_size = config['data']['batch_size']
 max_length = config['data']['max_len']
-src_vocab_size = len(src['tok2id'])
-tgt_vocab_size = len(tgt['tok2id'])
-
+src_vocab_size = tgt_vocab_size = len(src['tokenizer'])
 
 weight_mask = torch.ones(tgt_vocab_size)
-weight_mask[tgt['tok2id']['<pad>']] = 0
+padding_id = data.get_padding_id(src['tokenizer'])
+weight_mask[padding_id] = 0
 loss_criterion = nn.CrossEntropyLoss(weight=weight_mask)
 if CUDA:
     weight_mask = weight_mask.cuda()
@@ -101,15 +104,16 @@ if CUDA:
 torch.manual_seed(config['training']['random_seed'])
 np.random.seed(config['training']['random_seed'])
 
-model = models.SeqModel(
+model = models.FusedSeqModel(
    src_vocab_size=src_vocab_size,
    tgt_vocab_size=tgt_vocab_size,
-   pad_id_src=src['tok2id']['<pad>'],
-   pad_id_tgt=tgt['tok2id']['<pad>'],
-   config=config
+   pad_id_src=padding_id,
+   pad_id_tgt=padding_id,
+   config=config,
+   cache_dir=vocab_dir
 )
-
-logging.info('MODEL HAS %s params' %  model.count_params())
+trainable, untrainable = model.count_params()
+logging.info(f'MODEL HAS {trainable} trainable params and {untrainable} untrainable params')
 model, start_epoch = models.attempt_load_model(
     model=model,
     checkpoint_dir=working_dir)
@@ -126,10 +130,19 @@ elif config['training']['optimizer'] == 'sgd':
     lr = config['training']['learning_rate']
     optimizer = optim.SGD(model.parameters(), lr=lr)
 else:
-    raise NotImplementedError("Learning method not recommend for task")
+    raise NotImplementedError("Learning method not recommended for this task")
 
+scheduler_name = config['training']['scheduler']
 # reduce learning rate by a factor of 10 after plateau of 10 epochs
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
+if scheduler_name == 'plateau':
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
+elif scheduler_name == 'cyclic':
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
+        base_lr = lr,  
+        max_lr = 10 * lr
+    )
+else:
+    raise NotImplementedError("Learning scheduler not recommended for this task")
 
 epoch_loss = []
 start_since_last_report = time.time()
@@ -187,6 +200,8 @@ for epoch in range(start_epoch, config['training']['epochs']):
         writer.add_scalar('stats/grad_norm', norm, STEP)
 
         optimizer.step()
+        if scheduler_name == 'cyclic':
+            writer.add_scalar('stats/lr', scheduler.get_lr(), STEP)
 
         if args.overfit or batch_idx % config['training']['batches_per_report'] == 0:
 
@@ -214,9 +229,10 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
     writer.add_scalar('eval/loss', dev_loss, epoch)
     writer.add_scalar('stats/mean_entropy', mean_entropy, epoch)
-    for param_group in optimizer.param_groups:
-        writer.add_scalar('stats/lr', param_group['lr'], epoch)
-    scheduler.step(dev_loss)
+    if scheduler_name == 'plateau':
+        for param_group in optimizer.param_groups:
+            writer.add_scalar('stats/lr', param_group['lr'], epoch)
+        scheduler.step(dev_loss)
 
     if args.bleu and epoch >= config['training'].get('inference_start_epoch', 1):
         

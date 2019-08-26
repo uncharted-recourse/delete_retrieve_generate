@@ -1,6 +1,7 @@
 {
   "training": {
     "optimizer": "adam",
+    "scheduler": "plateau",
     "learning_rate": 0.0003,
     "max_norm": 3.0,
     "epochs": 100,
@@ -9,23 +10,23 @@
     "random_seed": 1
   },
   "data": {
-    "src": "data/gyafc/encoded_train_0.txt",
-    "tgt": "data/gyafc/encoded_train_1.txt",
-    "src_test": "data/gyafc/encoded_valid_0.txt",
-    "tgt_test": "data/gyafc/encoded_valid_1.txt",
-    "src_vocab": "data/gyafc/encoded_vocab.txt",
-    "tgt_vocab": "data/gyafc/encoded_vocab.txt",
-    "encoder": "data/gyafc/subword-encoder-1000.subwords",
+    "src": "data/gyafc_raw/sentiment.train.0",
+    "tgt": "data/gyafc_raw/sentiment.train.1",
+    "src_test": "data/gyafc_raw/sentiment.dev.0",
+    "tgt_test": "data/gyafc_raw/sentiment.dev.1",
+    "tokenizer": "gpt2",
     "share_vocab": true,
-    "attribute_vocab": "data/gyafc/encoded_attribute_vocab.txt",
-    "ngram_attributes": true,
+    "noise": "dropout",
+    "dropout_prob": 0.1,
     "ngram_range": 5,
     "batch_size": 256,
     "max_len": 70,
-    "working_dir": "del_and_ret_subword"
+    "permutation": 3,
+    "working_dir": "testing",
+    "vocab_dir": "vocab_testing"
   },
     "model": {
-        "model_type": "delete_retrieve",
+        "model_type": "delete",
         "emb_dim": 128,
         "attention": false,
         "encoder": "lstm",
@@ -35,6 +36,9 @@
         "tgt_hidden_dim": 512,
         "tgt_layers": 1,
         "decode": "greedy",
+        "beam_width": 10,
+        "k": 10,
+        "temperature": 1.0,
         "dropout": 0.2
     }
 }

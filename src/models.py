@@ -14,7 +14,7 @@ import src.encoders as encoders
 
 from src.cuda import CUDA
 from src import data
-from src.data import extract_attributes, build_vocab_maps, CorpusSearcher, TfidfVectorizer
+from pytorch_transformers import OpenAIGPTModel, GPT2Model, XLNetModel, TransfoXLModel
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -53,67 +53,31 @@ def initialize_inference_model(config=None):
     # read target data from training corpus to estalish attribute vocabulary / similarity
     log("reading training data from style corpus'", level="debug")
     
-    if config['data']['ngram_attributes']:
-        # read attribute vocab as a dictionary mapping attributes to scores
-        pre_attr = {}
-        post_attr = {}
-        with open(config['data']['attribute_vocab']) as attr_file:
-            next(attr_file) # skip header
-            for line in attr_file:
-                parts = line.strip().split()
-                pre_salience = float(parts[-2])
-                post_salience = float(parts[-1])
-                attr = ' '.join(parts[:-2])
-                pre_attr[attr] = pre_salience
-                post_attr[attr] = post_salience
-    else:
-        pre_attr = post_attr = set([x.strip() for x in open(config['data']['attribute_vocab'])])
+    src, tgt = data.read_nmt_data(
+        src=config['data']['src'], 
+        tgt=config['data']['tgt'],
+        config=config,
+        cache_dir=config['data']['vocab'],
+        train_src = True,
+        train_tgt=True
+    )
 
-    src_lines = src_content = src_attribute = src_dist_measurer = None
-    tgt_lines = tgt_content = tgt_attribute = tgt_dist_measurer = None
-    src_tok2id, src_id2tok = build_vocab_maps(config['data']['src_vocab'])
-    tgt_tok2id, tgt_id2tok = build_vocab_maps(config['data']['tgt_vocab'])
+    # overwrite tgt_dist_measurer for inference in both directions
+    src['dist_measurer'] = data.CorpusSearcher(
+            query_corpus=[' '.join(x) for x in tgt['content']],
+            key_corpus=[' '.join(x) for x in src['content']],
+            value_corpus=[' '.join(x) for x in src['attribute']],
+            vectorizer=TfidfVectorizer(vocabulary=src['vocab']),
+            make_binary=False
+    )
 
-    if config['model']['model_type'] == 'delete_retrieve':
-        src_lines = [l.strip().lower().split() for l in open(config['data']['src'], 'r')] if config['data']['src'] else None
-        tgt_lines = [l.strip().lower().split() for l in open(config['data']['tgt'], 'r')] if config['data']['tgt'] else None
-
-        src_lines, src_content, src_attribute = list(zip(
-            *[extract_attributes(line, pre_attr, pre_attr, config['data']['ngram_range']) for line in src_lines]
-        ))
-        tgt_lines, tgt_content, tgt_attribute = list(zip(
-            *[extract_attributes(line, post_attr, post_attr, config['data']['ngram_range']) for line in tgt_lines]
-        ))
-        src_dist_measurer = CorpusSearcher(
-            query_corpus=[' '.join(x) for x in tgt_content],
-            key_corpus=[' '.join(x) for x in src_content],
-            value_corpus=[' '.join(x) for x in src_attribute],
-            vectorizer=TfidfVectorizer(vocabulary=src_tok2id),
-            make_binary=True
-        )
-        tgt_dist_measurer = CorpusSearcher(
-            query_corpus=[' '.join(x) for x in src_content],
-            key_corpus=[' '.join(x) for x in tgt_content],
-            value_corpus=[' '.join(x) for x in tgt_attribute],
-            vectorizer=TfidfVectorizer(vocabulary=tgt_tok2id),
-            make_binary=True
-        )
-    src = {
-        'data': src_lines, 'content': src_content, 'attribute': src_attribute,
-        'tok2id': src_tok2id, 'id2tok': src_id2tok, 'dist_measurer': src_dist_measurer,
-        'attr': pre_attr
-    }
-    tgt = {
-        'data': tgt_lines, 'content': tgt_content, 'attribute': tgt_attribute,
-        'tok2id': tgt_tok2id, 'id2tok': tgt_id2tok, 'dist_measurer': tgt_dist_measurer,
-        'attr': post_attr
-    }
     log("initializing model", level="debug")
+    padding_id = data.get_padding_id(src['tokenizer'])
     model = SeqModel(
-        src_vocab_size=len(tgt['tok2id']),
-        tgt_vocab_size=len(tgt['tok2id']),
-        pad_id_src=tgt['tok2id']['<pad>'],
-        pad_id_tgt=tgt['tok2id']['<pad>'],
+        src_vocab_size=len(src['tokenizer']),
+        tgt_vocab_size=len(src['tokenizer']),
+        pad_id_src=padding_id,
+        pad_id_tgt=padding_id,
         config=config
     )
     if CUDA:
@@ -285,11 +249,103 @@ class SeqModel(nn.Module):
 
         return decoder_logit, probs
 
+    # returns trainable params, untrainable params
     def count_params(self):
-        n_params = 0
+        n_trainable_params = 0
+        n_untrainable_params = 0
         for param in self.parameters():
-            n_params += np.prod(param.data.cpu().numpy().shape)
-        return n_params
+            if param.requires_grad:
+                n_trainable_params += np.prod(param.data.cpu().numpy().shape)
+            else:
+                n_untrainable_params += np.prod(param.data.cpu().numpy().shape)
+        return n_trainable_params, n_untrainable_params
+
+class FusedSeqModel(SeqModel):
+    def __init__(
+        self,
+        *args,
+        cache_dir = None,
+        join_method = 'add',
+        **kwargs,
+    ):
+        """Initialize model."""
+        super(FusedSeqModel, self).__init__(*args, **kwargs)
+
+        models = {
+            'gpt': OpenAIGPTModel, 
+            'gpt2': GPT2Model, 
+            'xlnet': XLNetModel,
+            'transformerxl': TransfoXLModel
+        }
+        model_weights = {
+            'gpt': 'openai-gpt', 
+            'gpt2': 'gpt2', 
+            'xlnet': 'xlnet-base-cased',
+            'transformerxl': 'transfo-xl-wt103'
+        }
+
+        model_name = self.config['data']['tokenizer']
+        if model_name not in models.keys():
+            raise Exception("Language model must be one of 'bert', 'gpt', 'gpt2', 'xlnet', 'transformerxl'")
+
+        # !! assume that language model and seq2seq are using same tokenization !!
+        self.language_model = models[model_name].from_pretrained(model_weights[model_name], 
+            cache_dir=cache_dir
+        )
+        if CUDA:
+            self.language_model = self.language_model.cuda()
+
+        # define layers that join language model and sequence to sequence
+        self.lm_output_projection = nn.Linear(
+            self.language_model.config.hidden_size,
+            self.tgt_vocab_size)
+
+        # join language model and s2s model
+        if join_method == "add":
+            self.multp = nn.Parameter(torch.rand(1))
+        elif join_method == "gate":
+            self.lm_sigmoid = nn.Sigmoid()
+        else:
+            raise Exception("join method must be 'gate' or 'add'")
+
+    def init_weights(self):
+        super(FusedSeqModel, self).init_weights()
+
+    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, finetune = True):
+
+        # generate predictions from language model
+        if finetune:
+            lm_features = self.language_model(input_src)[0]
+        else:
+            with torch.no_grad():
+                lm_features = self.language_model(input_src)[0]
+
+        # project language model feature vector to vocabulary size
+        lm_logit = self.lm_output_projection(lm_features)
+
+        # generate s2s logits
+        s2s_logit, _ = super(FusedSeqModel, self).forward(input_src,
+            input_tgt,
+            srcmask,
+            srclens,
+            input_attr,
+            attrlens,
+            attrmask)
         
+        # add or multiply projected logits
+        if join_method == "add":
+            combined_logit = s2s_logit.add(lm_logit * self.multp)
+        elif join_method == 'gate':
+            combined_logit = s2s_logit * self.lm_sigmoid(lm_logit)
+
+        probs = self.softmax(combined_logit)
+
+        return combined_logit, probs
+
+    def count_params(self):
+        return super(FusedSeqModel, self).count_params()
+
+
         
+
         
