@@ -276,8 +276,12 @@ def get_empty_id(tokenizer):
 
 def encode_text_data(lines, 
     encoder = 'gpt2',
+    start_token = '<s>',
+    stop_token = '</s>',
+    pad_token = '<pad>',
+    empty_token = '<empty>',
     cache_dir = None
-    ):
+):
 
     # define dicts of tokenizers and tokenizer weights
     tokenizers = {
@@ -299,9 +303,17 @@ def encode_text_data(lines,
         tokenizer = tokenizers[encoder].from_pretrained(
             tokenizer_weights[encoder], 
             cache_dir = cache_dir,
-            # extra token for empty attribute lines in Delete+Retrieve
-            additional_special_tokens = ['<s>', '</s>', '<pad>', '<empty>']
         )
+        
+        # extra token for empty attribute lines in Delete+Retrieve
+        special_tokens_dict = {
+            'bos_token': start_token,
+            'eos_token': stop_token,
+            'pad_token': pad_token,
+            'additional_special_tokens': [empty_token]
+        }
+        tokenizer.add_special_tokens(special_tokens_dict)
+
     tokenized_lines = [[str(e) for e in tokenizer.encode(line)] for line in lines]
     return tokenized_lines, tokenizer
 
@@ -501,22 +513,23 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     return input_lines, output_lines, lens, mask, idx
 
 
-# def back_translation_minibatch(src, tgt, idx, batch_size, max_len, model_type):
+def back_translation_minibatch(src, tgt, idx, batch_size, max_len, model_type):
 
-#     use_src = random.random() < 0.5
-#     in_dataset = src if use_src else tgt
-#     out_dataset = in_dataset
+    use_src = random.random() < 0.5
+    in_dataset = src if use_src else tgt
+    out_dataset = in_dataset
 
-#     # flip attribute id to get encoded samples 
-#     attribute_id = 1 if use_src else 0
+    # flip attribute id to get encoded samples 
+    attribute_id = 1 if use_src else 0
 
 
-def minibatch(src, tgt, idx, batch_size, max_len, model_type, is_test=False):
+def minibatch(src, tgt, idx, batch_size, max_len, model_type, is_test=False, is_bt = False):
 
     if not is_test:
         use_src = random.random() < 0.5
         in_dataset = src if use_src else tgt
         out_dataset = in_dataset
+        # flip 
         attribute_id = 0 if use_src else 1
     else:
         in_dataset = src
