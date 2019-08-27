@@ -228,7 +228,6 @@ class SeqModel(nn.Module):
         h_t = self.h_bridge(h_t)
 
         # # # #  # # # #  # #  # # # # # # #  # # end diff
-
         tgt_emb = self.tgt_embedding(input_tgt)
         tgt_outputs, (_, _) = self.decoder(
             tgt_emb,
@@ -322,7 +321,7 @@ class FusedSeqModel(SeqModel):
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask):
 
         # generate predictions from language model
-        lm_features = self.language_model(input_src)[0]
+        lm_features = self.language_model(input_tgt)[0]
 
         # project language model feature vector to vocabulary size
         lm_logit = self.lm_output_projection(lm_features)
@@ -335,10 +334,10 @@ class FusedSeqModel(SeqModel):
             input_attr,
             attrlens,
             attrmask)
-        
+
         # add or multiply projected logits
         if self.join_method == "add":
-            combined_logit = s2s_logit.add(lm_logit * self.multp)
+            combined_logit = s2s_logit.add(lm_logit * self.multp.expand_as(lm_logit))
         elif self.join_method == 'gate':
             combined_logit = s2s_logit * self.lm_sigmoid(lm_logit)
 

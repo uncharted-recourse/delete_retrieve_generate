@@ -82,9 +82,7 @@ class AttentionalLSTM(nn.Module):
         # combine outputs, and get into [time, batch, dim]
         output = torch.cat(output, 0).view(
             input.size(0), *output[0].size())
-
         output = output.transpose(0, 1)
-
         return output, hidden
 
 
