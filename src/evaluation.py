@@ -203,7 +203,8 @@ def inference_metrics(model, src, tgt, config):
     """ decode and evaluate bleu """
     inputs, preds, ground_truths, auxs = decode_dataset(
         model, src, tgt, config)
-
+    print(preds[0])
+    print(ground_truths[0])
     bleu = get_bleu(preds, ground_truths)
     edit_distance = get_edit_distance(preds, ground_truths)
 
