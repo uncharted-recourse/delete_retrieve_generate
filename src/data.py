@@ -263,16 +263,16 @@ def calculate_ngram_attribute_vocab(tokenized_src_lines, tokenized_tgt_lines, sa
     return calculate_attribute_markers((prepped_src, prepped_tgt))
 
 def get_padding_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[0])
+    return tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
 
 def get_start_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[1])
+    return tokenizer.convert_tokens_to_ids(tokenizer.bos_token)
 
 def get_stop_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[2])
+    return tokenizer.convert_tokens_to_ids(tokenizer.eos_token)
 
 def get_empty_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[3])
+    return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[0])
 
 def encode_text_data(lines, 
     encoder = 'gpt2',
