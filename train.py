@@ -71,6 +71,8 @@ logger.setLevel(logging.INFO)
 logging.info('Reading data ...')
 input_lines_src = [l for l in open(config['data']['src'], 'r')]
 input_lines_tgt = [l for l in open(config['data']['tgt'], 'r')]
+input_lines_src_test = [l for l in open(config['data']['src_test'], 'r')]
+input_lines_tgt_test = [l for l in open(config['data']['tgt_test'], 'r')]
 
 src, tgt = data.read_nmt_data(
    src_lines=input_lines_src,
@@ -80,8 +82,8 @@ src, tgt = data.read_nmt_data(
 )
 
 src_test, tgt_test = data.read_nmt_data(
-    src_lines=config['data']['src_test'],
-    tgt_lines=config['data']['tgt_test'],
+    src_lines=input_lines_src_test,
+    tgt_lines=input_lines_tgt_test,
     config=config,
     train_src=True,
     train_tgt=tgt,
@@ -174,7 +176,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         batch_idx = i / batch_size
 
         input_content, input_aux, output = data.minibatch(
-            src, tgt, i, batch_size, max_length, config['model']['model_type'], config['data']['noise'])
+            src, tgt, i, batch_size, max_length, config['model']['model_type'])
         input_lines_src, _, srclens, srcmask, _ = input_content
         input_ids_aux, _, auxlens, auxmask, _ = input_aux
         input_lines_tgt, output_lines_tgt, _, _, _ = output
@@ -182,6 +184,10 @@ for epoch in range(start_epoch, config['training']['epochs']):
         decoder_logit, decoder_probs = model(
             input_lines_src, input_lines_tgt, srcmask, srclens,
             input_ids_aux, auxlens, auxmask)
+
+        # back translation
+        # 1. d(encoded state + other style)
+        # 2. e( above, original style)
 
         optimizer.zero_grad()
 

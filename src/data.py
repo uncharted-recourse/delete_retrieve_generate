@@ -328,7 +328,7 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
         encoder = config['data']['tokenizer'], 
         cache_dir=cache_dir
     )
-    tokenized_vocab = np.unique(np.array(tokenized_src_lines + tokenized_tgt_lines).flatten())
+    tokenized_vocab = np.unique(np.array([w for line in tokenized_src_lines + tokenized_tgt_lines for w in line]))
 
     # 2. Perform noising
     # A.  do noisy masking according to Lample et. al (2017) - in extract_attributes()
@@ -414,7 +414,8 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
     # create dictionaries of src and tgt data
     src = {
         'data': src_lines, 'content': src_content, 'attribute': src_attribute,
-        'dist_measurer': src_dist_measurer, 'tokenizer': tokenizer, 'vocab': tokenized_vocab    }
+        'dist_measurer': src_dist_measurer, 'tokenizer': tokenizer, 'vocab': tokenized_vocab    
+    }
     tgt = {
         'data': tgt_lines, 'content': tgt_content, 'attribute': tgt_attribute,
         'dist_measurer': tgt_dist_measurer, 'tokenizer': tokenizer
@@ -513,15 +514,17 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     return input_lines, output_lines, lens, mask, idx
 
 
-def back_translation_minibatch(src, tgt, idx, batch_size, max_len, model_type):
+# def back_translation_minibatch(src, tgt, idx, batch_size, max_len, model, model_type):
 
-    use_src = random.random() < 0.5
-    in_dataset = src if use_src else tgt
-    out_dataset = in_dataset
+#     # get minibatch of inputs, attributes, outputs in other style direction
+#     input_content, input_aux, output = data.minibatch(
+#         src, tgt, idx, batch_size, max_len, config['model']['model_type'], is_bt = True)
+#     input_lines_src, _, srclens, srcmask, _ = input_content
+#     input_ids_aux, _, auxlens, auxmask, _ = input_aux
+#     input_lines_tgt, output_lines_tgt, _, _, _ = output
 
-    # flip attribute id to get encoded samples 
-    attribute_id = 1 if use_src else 0
-
+#     # decode dataset with greedy, beam search, or top k
+#     # TODO: break out into separate function
 
 def minibatch(src, tgt, idx, batch_size, max_len, model_type, is_test=False, is_bt = False):
 
@@ -529,8 +532,12 @@ def minibatch(src, tgt, idx, batch_size, max_len, model_type, is_test=False, is_
         use_src = random.random() < 0.5
         in_dataset = src if use_src else tgt
         out_dataset = in_dataset
-        # flip 
-        attribute_id = 0 if use_src else 1
+        # flip attribute ids if generating backtranslation minibatch
+        if is_bt:
+            attribute_id = 0 if use_src else 1
+        else:
+            attribute_id = 1 if use_src else 0
+
     else:
         in_dataset = src
         out_dataset = tgt

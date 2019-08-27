@@ -293,6 +293,9 @@ class FusedSeqModel(SeqModel):
             cache_dir=self.config['data']['working_dir']
         )
 
+        # resize token embeddings if vocabulary has been augmented with special tokens
+        self.language_model.resize_token_embeddings(self.src_vocab_size)
+
         # finetune if desired
         if CUDA:
             self.language_model = self.language_model.cuda()
