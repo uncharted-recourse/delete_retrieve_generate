@@ -14,7 +14,7 @@ import src.encoders as encoders
 
 from src.cuda import CUDA
 from src import data
-from pytorch_transformers import OpenAIGPTModel, GPT2Model, XLNetModel, TransfoXLModel
+from pytorch_transformers import OpenAIGPTLMHeadModel, GPT2LMHeadModel, XLNetLMHeadModel, TransfoXLLMHeadModel
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -300,11 +300,6 @@ class FusedSeqModel(SeqModel):
             for param in self.language_model.parameters():
                 param.requires_grad = False
 
-        # define layers that join language model and sequence to sequence
-        # self.lm_output_projection = nn.Linear(
-        #     self.language_model.config.hidden_size,
-        #     self.tgt_vocab_size)
-
         # join language model and s2s model
         self.join_method = join_method
         if self.join_method == "add":
@@ -322,10 +317,7 @@ class FusedSeqModel(SeqModel):
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask):
 
         # generate predictions from language model
-        lm_features = self.language_model(input_tgt)[1]
-
-        # project language model feature vector to vocabulary size
-        # lm_logit = self.lm_output_projection(lm_features)
+        lm_logit = self.language_model(input_tgt)[0]
 
         # generate s2s logits
         s2s_logit, _ = super(FusedSeqModel, self).forward(input_src,

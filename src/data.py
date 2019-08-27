@@ -263,16 +263,16 @@ def calculate_ngram_attribute_vocab(tokenized_src_lines, tokenized_tgt_lines, sa
     return calculate_attribute_markers((prepped_src, prepped_tgt))
 
 def get_padding_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
+    return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[0])
 
 def get_start_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.bos_token)
+    return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[1])
 
 def get_stop_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.eos_token)
+    return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[2])
 
 def get_empty_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[0])
+    return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[3])
 
 def encode_text_data(lines, 
     encoder = 'gpt2',
@@ -299,12 +299,8 @@ def encode_text_data(lines,
         tokenizer = tokenizers[encoder].from_pretrained(
             tokenizer_weights[encoder], 
             cache_dir = cache_dir,
-            bos_token = '<s>',
-            eos_token = '</s>',
-            pad_token = '<pad>',
-            #unk_token = '<unk>',
             # extra token for empty attribute lines in Delete+Retrieve
-            additional_special_tokens = ['<empty>']
+            additional_special_tokens = ['<s>', '</s>', '<pad>', '<empty>']
         )
     tokenized_lines = [[str(e) for e in tokenizer.encode(line)] for line in lines]
     return tokenized_lines, tokenizer
@@ -505,29 +501,31 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     return input_lines, output_lines, lens, mask, idx
 
 
-def minibatch(src, tgt, idx, batch_size, max_len, model_type, noise_config, is_test=False):
+# def back_translation_minibatch(src, tgt, idx, batch_size, max_len, model_type):
 
-    # delete_retrieve model is not supported with noise_config bc no concept of attributes
-    if noise_config and model_type == 'delete_retrieve':
-        raise Exception('Delete_Retrieve model is not supported with noise corrpution model')
+#     use_src = random.random() < 0.5
+#     in_dataset = src if use_src else tgt
+#     out_dataset = in_dataset
+
+#     # flip attribute id to get encoded samples 
+#     attribute_id = 1 if use_src else 0
+
+
+def minibatch(src, tgt, idx, batch_size, max_len, model_type, is_test=False):
 
     if not is_test:
         use_src = random.random() < 0.5
         in_dataset = src if use_src else tgt
         out_dataset = in_dataset
         attribute_id = 0 if use_src else 1
-        input_text = 'content'
     else:
         in_dataset = src
         out_dataset = tgt
         attribute_id = 1
 
-        # if noising approach is dropout, start with full data input at test not just dropout
-        input_text = 'data' if noise_config == 'dropout' else 'content'
-
     if model_type == 'delete':
         inputs = get_minibatch(
-            in_dataset[input_text], in_dataset['tokenizer'], idx, batch_size, max_len, sort=True)
+            in_dataset['content'], in_dataset['tokenizer'], idx, batch_size, max_len, sort=True)
         outputs = get_minibatch(
             out_dataset['data'], out_dataset['tokenizer'], idx, batch_size, max_len, idx=inputs[-1])
 
