@@ -272,10 +272,10 @@ class FusedSeqModel(SeqModel):
         super(FusedSeqModel, self).__init__(*args, **kwargs)
 
         models = {
-            'gpt': OpenAIGPTModel, 
+            'gpt': OpenAIGPTLMHeadModel, 
             'gpt2': GPT2LMHeadModel, 
-            'xlnet': XLNetModel,
-            'transformerxl': TransfoXLModel
+            'xlnet': XLNetLMHeadModel,
+            'transformerxl': TransfoXLLMHeadModel
         }
         model_weights = {
             'gpt': 'openai-gpt', 
