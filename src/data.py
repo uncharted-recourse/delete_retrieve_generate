@@ -306,7 +306,7 @@ def encode_text_data(lines,
             cache_dir = cache_dir,
         )
         
-        extra token for empty attribute lines in Delete+Retrieve
+        # extra token for empty attribute lines in Delete+Retrieve
         special_tokens_dict = {
             'bos_token': start_token,
             'eos_token': stop_token,
@@ -329,7 +329,9 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
         encoder = config['data']['tokenizer'], 
         cache_dir=cache_dir
     )
-    tokenized_vocab = np.unique(np.array([w for line in tokenized_src_lines + tokenized_tgt_lines for w in line]))
+    tokenized_src_corpus = [w for line in tokenized_src_lines for w in line]
+    tokenized_tgt_corpus = [w for line in tokenized_tgt_lines for w in line]
+    tokenized_vocab = np.unique(np.array(tokenized_src_corpus.extend(tokenized_tgt_corpus)))
 
     # 2. Perform noising
     # A.  do noisy masking according to Lample et. al (2017) - in extract_attributes()
@@ -346,7 +348,7 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
             pre_attr = pickle.load(open(pre_attr_path, "rb"))
             post_attr = pickle.load(open(post_attr_path, "rb"))
         else:
-            sc = SalienceCalculator(tokenized_src_lines, tokenized_tgt_lines)
+            sc = SalienceCalculator(tokenized_src_corpus, tokenized_tgt_corpus)
             # extract attributes 
             pre_attr = post_attr = set([tok for tok in tokenized_vocab if max(sc.salience(tok, attribute='pre'), sc.salience(tok, attribute='post')) > config['data']['salience_threshold']])
             pickle.dump(pre_attr, open(pre_attr_path, "wb"))
@@ -362,8 +364,8 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
             pre_attr = pickle.load(open(pre_attr_path, "rb"))
             post_attr = pickle.load(open(post_attr_path, "rb"))
         else:
-            pre_attr, post_attr = calculate_ngram_attribute_vocab(tokenized_src_lines, 
-                tokenized_tgt_lines,
+            pre_attr, post_attr = calculate_ngram_attribute_vocab(tokenized_src_corpus, 
+                tokenized_tgt_corpus,
                 config['data']['salience_threshold'], 
                 config['data']['ngram_range'])
             pickle.dump(pre_attr, open(pre_attr_path, "wb"))
