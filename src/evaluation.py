@@ -113,6 +113,59 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
         out = data.unsort(out, indices)
     return out
 
+def generate_sequences(tokenizer, model, start_id, stop_id, max_len, input_content, input_aux, output)
+    input_lines_src, output_lines_src, srclens, srcmask, indices = input_content
+    input_ids_aux, _, auxlens, auxmask, _ = input_aux
+    input_lines_tgt, output_lines_tgt, _, _, _ = output
+
+    # decode dataset with greedy, beam search, or top k
+    start_time = time.time()
+    if config['model']['decode'] == 'greedy':
+        tgt_pred = decode_minibatch_greedy(
+            config['data']['max_len'], start_id, 
+            model, input_lines_src, srclens, srcmask,
+            input_ids_aux, auxlens, auxmask)
+        log(f'greedy search decoding took: {time.time() - start_time}', level='debug')
+    elif config['model']['decode'] == 'beam_search':
+        start_time = time.time()
+        if config['model']['model_type'] == 'delete_retrieve':
+            tgt_pred = torch.stack([beam_search_decode(
+                model, i, [i_l], i_m, a, [a_l], a_m,
+                start_id, stop_id,
+                config['data']['max_len'], config['model']['beam_width']) for 
+                i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
+                input_ids_aux, auxlens, auxmask)])
+        elif config['model']['model_type'] == 'delete':
+            input_ids_aux = input_ids_aux.unsqueeze(1)
+            tgt_pred = torch.stack([beam_search_decode(
+                model, i, [i_l], i_m, a, None, None,
+                start_id, stop_id,
+                config['data']['max_len'], config['model']['beam_width']) for 
+                i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
+                input_ids_aux)])
+        log(f'beam search decoding took: {time.time() - start_time}', level='debug')
+    elif config['model']['decode'] == 'top_k':
+        if config['model']['model_type'] == 'delete_retrieve':
+            tgt_pred = torch.stack([top_k_decode(
+                model, i, [i_l], i_m, a, [a_l], a_m,
+                start_id, stop_id,
+                config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
+                i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
+                input_ids_aux, auxlens, auxmask)])
+        elif config['model']['model_type'] == 'delete':
+            input_ids_aux = input_ids_aux.unsqueeze(1)
+            tgt_pred = torch.stack([top_k_decode(
+                model, i, [i_l], i_m, a, None, None,
+                start_id, stop_id,
+                config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
+                i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
+                input_ids_aux)])
+        log(f'top k decoding took: {time.time() - start_time}', level='debug')
+    else:
+        raise Exception('Decoding method must be one of greedy, beam_search, top_k')
+
+    return tgt_pred
+
 def decode_dataset(model, src, tgt, config):
     """Evaluate model."""
     inputs = []
@@ -134,58 +187,23 @@ def decode_dataset(model, src, tgt, config):
         input_ids_aux, _, auxlens, auxmask, _ = input_aux
         input_lines_tgt, output_lines_tgt, _, _, _ = output
 
-        # decode dataset with greedy, beam search, or top k
+        # generate sequences according to decoding strategy
         tokenizer = src['tokenizer']
-        start_id = data.get_start_id(tokenizer)
-        stop_id = data.get_stop_id(tokenizer)
-        start_time = time.time()
-        if config['model']['decode'] == 'greedy':
-            tgt_pred = decode_minibatch_greedy(
-                config['data']['max_len'], start_id, 
-                model, input_lines_src, srclens, srcmask,
-                input_ids_aux, auxlens, auxmask)
-            log(f'greedy search decoding took: {time.time() - start_time}', level='debug')
-        elif config['model']['decode'] == 'beam_search':
-            start_time = time.time()
-            if config['model']['model_type'] == 'delete_retrieve':
-                tgt_pred = torch.stack([beam_search_decode(
-                    model, i, [i_l], i_m, a, [a_l], a_m,
-                    start_id, stop_id,
-                    config['data']['max_len'], config['model']['beam_width']) for 
-                    i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
-                    input_ids_aux, auxlens, auxmask)])
-            elif config['model']['model_type'] == 'delete':
-                input_ids_aux = input_ids_aux.unsqueeze(1)
-                tgt_pred = torch.stack([beam_search_decode(
-                    model, i, [i_l], i_m, a, None, None,
-                    start_id, stop_id,
-                    config['data']['max_len'], config['model']['beam_width']) for 
-                    i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
-                    input_ids_aux)])
-            log(f'beam search decoding took: {time.time() - start_time}', level='debug')
-        elif config['model']['decode'] == 'top_k':
-            if config['model']['model_type'] == 'delete_retrieve':
-                tgt_pred = torch.stack([top_k_decode(
-                    model, i, [i_l], i_m, a, [a_l], a_m,
-                    start_id, stop_id,
-                    config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
-                    i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
-                    input_ids_aux, auxlens, auxmask)])
-            elif config['model']['model_type'] == 'delete':
-                input_ids_aux = input_ids_aux.unsqueeze(1)
-                tgt_pred = torch.stack([top_k_decode(
-                    model, i, [i_l], i_m, a, None, None,
-                    start_id, stop_id,
-                    config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
-                    i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
-                    input_ids_aux)])
-            log(f'top k decoding took: {time.time() - start_time}', level='debug')
-        else:
-            raise Exception('Decoding method must be one of greedy, beam_search, top_k')
+        tgt_pred = generate_sequences(
+            tokenizer,
+            model, 
+            data.get_start_id(tokenizer),
+            data.get_stop_id(tokenizer),
+            config['data']['max_len'],
+            input_content,
+            input_aux,
+            output
+        )
 
         # convert inputs/preds/targets/aux to human-readable form
         inputs += ids_to_toks(output_lines_src, tokenizer, indices=indices)
         preds += ids_to_toks(tgt_pred, tokenizer, indices=indices)
+        print(output_lines_tgt)
         ground_truths += ids_to_toks(output_lines_tgt, tokenizer, indices=indices)
         
         if config['model']['model_type'] == 'delete':
@@ -244,7 +262,7 @@ def evaluate_lpp(model, src, tgt, config):
         input_lines_src, _, srclens, srcmask, _ = input_content
         input_ids_aux, _, auxlens, auxmask, _ = input_aux
         input_lines_tgt, output_lines_tgt, _, _, _ = output
-
+        print(output_lines_tgt)
         decoder_logit, decoder_probs = model(
             input_lines_src, input_lines_tgt, srcmask, srclens,
             input_ids_aux, auxlens, auxmask)

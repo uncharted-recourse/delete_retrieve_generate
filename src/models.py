@@ -62,15 +62,6 @@ def initialize_inference_model(config=None):
         train_tgt=True
     )
 
-    # overwrite tgt_dist_measurer for inference in both directions
-    src['dist_measurer'] = data.CorpusSearcher(
-            query_corpus=[' '.join(x) for x in tgt['content']],
-            key_corpus=[' '.join(x) for x in src['content']],
-            value_corpus=[' '.join(x) for x in src['attribute']],
-            vectorizer=TfidfVectorizer(vocabulary=src['vocab']),
-            make_binary=False
-    )
-
     log("initializing model", level="debug")
     padding_id = data.get_padding_id(src['tokenizer'])
     model = SeqModel(

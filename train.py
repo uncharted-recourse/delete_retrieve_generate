@@ -80,7 +80,7 @@ src, tgt = data.read_nmt_data(
    config=config,
    cache_dir=vocab_dir
 )
-
+print(input_lines_tgt_test[0])
 src_test, tgt_test = data.read_nmt_data(
     src_lines=input_lines_src_test,
     tgt_lines=input_lines_tgt_test,
@@ -89,6 +89,7 @@ src_test, tgt_test = data.read_nmt_data(
     train_tgt=tgt,
     cache_dir=vocab_dir
 )
+print(tgt_test['data'][0])
 logging.info('...done!')
 
 batch_size = config['data']['batch_size']
@@ -185,9 +186,8 @@ for epoch in range(start_epoch, config['training']['epochs']):
             input_lines_src, input_lines_tgt, srcmask, srclens,
             input_ids_aux, auxlens, auxmask)
 
-        # back translation
-        # 1. d(encoded state + other style)
-        # 2. e( above, original style)
+        # repeat above two steps w/ back translation minibatch
+        # calculate loss on two minibatches separately, weight losses w/ ratio
 
         optimizer.zero_grad()
 
