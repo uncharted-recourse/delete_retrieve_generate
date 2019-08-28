@@ -9,7 +9,7 @@ import torch
 from torch.autograd import Variable
 
 from src.cuda import CUDA
-import src.evaluation as evaluation
+from src import evaluation
 
 import logging
 from utils.log_func import get_log_func
@@ -304,16 +304,20 @@ def encode_text_data(lines,
         tokenizer = tokenizers[encoder].from_pretrained(
             tokenizer_weights[encoder], 
             cache_dir = cache_dir,
+            bos_token = start_token,
+            eos_token = stop_token,
+            pad_token = pad_token,
+            additional_special_tokens = [empty_token]
         )
         
         # extra token for empty attribute lines in Delete+Retrieve
-        special_tokens_dict = {
-            'bos_token': start_token,
-            'eos_token': stop_token,
-            'pad_token': pad_token,
-            'additional_special_tokens': [empty_token]
-        }
-        tokenizer.add_special_tokens(special_tokens_dict)
+        # special_tokens_dict = {
+        #     'bos_token': start_token,
+        #     'eos_token': stop_token,
+        #     'pad_token': pad_token,
+        #     'additional_special_tokens': [empty_token]
+        # }
+        # tokenizer.add_special_tokens(special_tokens_dict)
 
     tokenized_lines = [[str(e) for e in tokenizer.encode(line)] for line in lines]
     return tokenized_lines, tokenizer
@@ -401,10 +405,10 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
         )
     # at test time, scan through train content (using tfidf) and retrieve corresponding attributes
     else:
-        src_dist_measurer = data.CorpusSearcher(
+        src_dist_measurer = CorpusSearcher(
             query_corpus=[' '.join(x) for x in tgt_content],
             key_corpus=[' '.join(x) for x in train_src['content']],
-            value_corpus=[' '.join(x) for x in train_tgt['attribute']],
+            value_corpus=[' '.join(x) for x in train_src['attribute']],
             vectorizer=TfidfVectorizer(),
             make_binary=False
         )

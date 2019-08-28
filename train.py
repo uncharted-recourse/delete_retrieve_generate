@@ -32,7 +32,7 @@ parser.add_argument(
     action='store_true'
 )
 parser.add_argument(
-    "--overfit",
+    "--overfit", 
     help="train continuously on one batch of data",
     action='store_true'
 )
@@ -80,16 +80,14 @@ src, tgt = data.read_nmt_data(
    config=config,
    cache_dir=vocab_dir
 )
-print(input_lines_tgt_test[0])
 src_test, tgt_test = data.read_nmt_data(
     src_lines=input_lines_src_test,
     tgt_lines=input_lines_tgt_test,
     config=config,
-    train_src=True,
+    train_src=src,
     train_tgt=tgt,
     cache_dir=vocab_dir
 )
-print(tgt_test['data'][0])
 logging.info('...done!')
 
 batch_size = config['data']['batch_size']

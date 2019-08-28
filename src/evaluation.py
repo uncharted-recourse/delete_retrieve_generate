@@ -8,7 +8,7 @@ from torch.autograd import Variable
 import torch.nn as nn
 import editdistance
 import heapq
-import src.data as data
+from src import data
 from src.cuda import CUDA
 from src.callbacks import mean_masked_entropy
 
@@ -103,17 +103,17 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     tok_seqs = tok_seqs.cpu().numpy()
     # convert to toks, cut off at </s>, delete any start tokens (preds were kickstarted w them)
     for line in tok_seqs:
-        toks = tokenizer.convert_ids_to_tokens(line)
-        if '<s>' in toks: 
-            toks.remove('<s>')
-        cut_idx = toks.index('</s>') if '</s>' in toks else len(toks)
-        out.append( toks[:cut_idx] )
+        toks = tokenizer.decode(line)
+        toks = toks.split('<s>')
+        toks = toks[0] if len(toks) == 1 else toks[1]
+        toks = toks.split('</s>')[0]
+        out.append(toks)
     # unsort
     if sort:
         out = data.unsort(out, indices)
     return out
 
-def generate_sequences(tokenizer, model, start_id, stop_id, max_len, input_content, input_aux, output)
+def generate_sequences(tokenizer, model, config, start_id, stop_id, input_content, input_aux, output):
     input_lines_src, output_lines_src, srclens, srcmask, indices = input_content
     input_ids_aux, _, auxlens, auxmask, _ = input_aux
     input_lines_tgt, output_lines_tgt, _, _, _ = output
@@ -192,9 +192,9 @@ def decode_dataset(model, src, tgt, config):
         tgt_pred = generate_sequences(
             tokenizer,
             model, 
+            config,
             data.get_start_id(tokenizer),
             data.get_stop_id(tokenizer),
-            config['data']['max_len'],
             input_content,
             input_aux,
             output
@@ -203,7 +203,6 @@ def decode_dataset(model, src, tgt, config):
         # convert inputs/preds/targets/aux to human-readable form
         inputs += ids_to_toks(output_lines_src, tokenizer, indices=indices)
         preds += ids_to_toks(tgt_pred, tokenizer, indices=indices)
-        print(output_lines_tgt)
         ground_truths += ids_to_toks(output_lines_tgt, tokenizer, indices=indices)
         
         if config['model']['model_type'] == 'delete':
@@ -220,15 +219,13 @@ def inference_metrics(model, src, tgt, config):
     """ decode and evaluate bleu """
     inputs, preds, ground_truths, auxs = decode_dataset(
         model, src, tgt, config)
-    print(preds[0])
-    print(ground_truths[0])
     bleu = get_bleu(preds, ground_truths)
     edit_distance = get_edit_distance(preds, ground_truths)
 
-    inputs = [' '.join(seq) for seq in inputs]
-    preds = [' '.join(seq) for seq in preds]
-    ground_truths = [' '.join(seq) for seq in ground_truths]
-    auxs = [' '.join(seq) for seq in auxs]
+    inputs = [''.join(seq) for seq in inputs]
+    preds = [''.join(seq) for seq in preds]
+    ground_truths = [''.join(seq) for seq in ground_truths]
+    auxs = [''.join(seq) for seq in auxs]
 
     return bleu, edit_distance, inputs, preds, ground_truths, auxs
 
@@ -257,12 +254,11 @@ def evaluate_lpp(model, src, tgt, config):
             config['data']['batch_size'], 
             config['data']['max_len'], 
             config['model']['model_type'],
-            config['data']['noise'],
             is_test=True)
+
         input_lines_src, _, srclens, srcmask, _ = input_content
         input_ids_aux, _, auxlens, auxmask, _ = input_aux
         input_lines_tgt, output_lines_tgt, _, _, _ = output
-        print(output_lines_tgt)
         decoder_logit, decoder_probs = model(
             input_lines_src, input_lines_tgt, srcmask, srclens,
             input_ids_aux, auxlens, auxmask)
