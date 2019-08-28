@@ -302,11 +302,6 @@ class FusedSeqModel(SeqModel):
             self.lm_sigmoid = nn.Sigmoid()
         else:
             raise Exception("join method must be 'gate' or 'add'")
-        
-        self.init_weights()
-
-    def init_fused_weights(self):
-        self.lm_output_projection.bias.data.fill_(0)
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask):
 

@@ -16,15 +16,15 @@
     "tgt_test": "data/gyafc_raw/sentiment.dev.1_",
     "tokenizer": "gpt2",
     "share_vocab": true,
-    "noise": "word_attributes",
+    "noise": "dropout",
     "dropout_prob": 0.1,
     "ngram_range": 5,
     "salience_threshold": 5,
     "batch_size": 64,
     "max_len": 50,
     "permutation": 0,
-    "working_dir": "testing_two",
-    "vocab_dir": "vocab_testing"
+    "working_dir": "noise",
+    "vocab_dir": "noise_vocab"
   },
     "model": {
         "model_type": "delete",

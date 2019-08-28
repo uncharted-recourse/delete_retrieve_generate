@@ -252,14 +252,8 @@ def calculate_ngram_attribute_vocab(tokenized_src_lines, tokenized_tgt_lines, sa
                             post_attr[gram] = positive_salience
         return pre_attr, post_attr
 
-    def prep_corpus(lines):
-        prepped_lines = []
-        for line in lines:
-            prepped_lines.append(' '.join(line))
-        return prepped_lines
-
-    prepped_src = prep_corpus(tokenized_src_lines)
-    prepped_tgt = prep_corpus(tokenized_tgt_lines)
+    prepped_src = [' '.join(line) for line in tokenized_src_lines]
+    prepped_tgt = [' '.join(line) for line in tokenized_tgt_lines]
     sc = SalienceCalculator(prepped_src, prepped_tgt, tokenize)
     return calculate_attribute_markers((prepped_src, prepped_tgt))
 
@@ -304,16 +298,20 @@ def encode_text_data(lines,
         tokenizer = tokenizers[encoder].from_pretrained(
             tokenizer_weights[encoder], 
             cache_dir = cache_dir,
+            bos_token = start_token,
+            eos_token = stop_token,
+            pad_token = pad_token,
+            additional_special_tokens = [empty_token]
         )
         
-        # extra token for empty attribute lines in Delete+Retrieve
-        special_tokens_dict = {
-            'bos_token': start_token,
-            'eos_token': stop_token,
-            'pad_token': pad_token,
-            'additional_special_tokens': [empty_token]
-        }
-        tokenizer.add_special_tokens(special_tokens_dict)
+        # # extra token for empty attribute lines in Delete+Retrieve
+        # special_tokens_dict = {
+        #     'bos_token': start_token,
+        #     'eos_token': stop_token,
+        #     'pad_token': pad_token,
+        #     'additional_special_tokens': [empty_token]
+        # }
+        # tokenizer.add_special_tokens(special_tokens_dict)
 
     tokenized_lines = [[str(e) for e in tokenizer.encode(line)] for line in lines]
     return tokenized_lines, tokenizer
@@ -331,7 +329,7 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
     )
     tokenized_src_corpus = [w for line in tokenized_src_lines for w in line]
     tokenized_tgt_corpus = [w for line in tokenized_tgt_lines for w in line]
-    tokenized_vocab = np.unique(np.array(tokenized_src_corpus.extend(tokenized_tgt_corpus)))
+    tokenized_vocab = np.unique(np.array(tokenized_src_corpus + tokenized_tgt_corpus))
 
     # 2. Perform noising
     # A.  do noisy masking according to Lample et. al (2017) - in extract_attributes()
@@ -364,8 +362,8 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
             pre_attr = pickle.load(open(pre_attr_path, "rb"))
             post_attr = pickle.load(open(post_attr_path, "rb"))
         else:
-            pre_attr, post_attr = calculate_ngram_attribute_vocab(tokenized_src_corpus, 
-                tokenized_tgt_corpus,
+            pre_attr, post_attr = calculate_ngram_attribute_vocab(tokenized_src_lines, 
+                tokenized_tgt_lines,
                 config['data']['salience_threshold'], 
                 config['data']['ngram_range'])
             pickle.dump(pre_attr, open(pre_attr_path, "wb"))
