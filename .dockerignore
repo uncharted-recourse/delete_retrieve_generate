@@ -3,6 +3,7 @@
 # mount volumes for data storage instead
 !checkpoints/
 other_data/
+data/
 compare_preds.py
 tools/
 
