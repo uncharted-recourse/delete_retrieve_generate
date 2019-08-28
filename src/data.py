@@ -477,7 +477,7 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     if dist_measurer is not None:
         lines = sample_replace(lines, dist_measurer, sample_rate, index)
 
-    lens = [len(line) - 1 for line in lines]
+    lens = [len(line) for line in lines]
     max_len = max(lens)
 
     input_lines = [
