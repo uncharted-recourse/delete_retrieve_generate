@@ -97,10 +97,16 @@ src_vocab_size = tgt_vocab_size = len(src['tokenizer'])
 weight_mask = torch.ones(tgt_vocab_size)
 padding_id = data.get_padding_id(src['tokenizer'])
 weight_mask[padding_id] = 0
-loss_criterion = nn.CrossEntropyLoss(weight=weight_mask)
+loss_crit = config['training']['loss_criterion']
+if loss_crit == 'cross_entropy':
+    loss_criterion = nn.CrossEntropyLoss(weight=weight_mask)
+    if CUDA:
+        loss_criterion = loss_criterion.cuda()
+elif loss_crit != 'expected_bleu':
+    raise NotImplementedError("Loss criterion not supported for this task")
+
 if CUDA:
     weight_mask = weight_mask.cuda()
-    loss_criterion = loss_criterion.cuda()
 
 torch.manual_seed(config['training']['random_seed'])
 np.random.seed(config['training']['random_seed'])
@@ -178,7 +184,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
             src, tgt, i, batch_size, max_length, config['model']['model_type'])
         input_lines_src, _, srclens, srcmask, _ = input_content
         input_ids_aux, _, auxlens, auxmask, _ = input_aux
-        input_lines_tgt, output_lines_tgt, _, _, _ = output
+        input_lines_tgt, output_lines_tgt, tgtlens, _, _ = output
         
         decoder_logit, decoder_probs = model(
             input_lines_src, input_lines_tgt, srcmask, srclens,
@@ -189,10 +195,15 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
         optimizer.zero_grad()
 
-        loss = loss_criterion(
-            decoder_logit.contiguous().view(-1, tgt_vocab_size),
-            output_lines_tgt.view(-1)
-        )
+        if loss_crit == 'cross_entropy':
+            loss = loss_criterion(
+                decoder_logit.contiguous().view(-1, tgt_vocab_size),
+                output_lines_tgt.view(-1)
+            )
+        else:
+            loss = bleu(decoder_probs, output_lines_tgt.view(-1), 
+                torch.LongTensor([max_length] * batch_size),
+                tgtlens, max_order=config['data']['ngram_range'], smooth=True)[0]
 
         losses.append(loss.item())
         losses_since_last_report.append(loss.item())
