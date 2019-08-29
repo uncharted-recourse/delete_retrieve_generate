@@ -103,7 +103,7 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     tok_seqs = tok_seqs.cpu().numpy()
     # convert to toks, delete any special tokens (bos, eos, pad)
     toks = [tokenizer.decode(line) for line in tok_seqs]
-    cleaned_toks = [tok.replace(tokenizer.bos_token, '').replace(tokenizer.eos_token, '').replace(tokenizer.pad_token, '') for tok in toks]
+    cleaned_toks = [tok.replace(tokenizer.bos_token, '').replace(tokenizer.eos_token, '').replace(tokenizer.pad_token, '').replace('<|endoftext|>', '') for tok in toks]
     # for line in tok_seqs:
     #     toks = tokenizer.decode(line)
     #     toks = toks.split('<s>')

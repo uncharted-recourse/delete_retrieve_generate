@@ -161,7 +161,7 @@ num_batches = len(src['content']) / batch_size
 
 STEP = 0
 for epoch in range(start_epoch, config['training']['epochs']):
-    
+    epoch_start_time = time.time()
     if cur_metric > best_metric:
         # rm old checkpoint
         for ckpt_path in glob.glob(working_dir + '/model.*'):
@@ -269,9 +269,9 @@ for epoch in range(start_epoch, config['training']['epochs']):
         cur_metric = dev_loss
    
     model.train()
-    logging.info('METRIC: %s. TIME: %.2fs CHECKPOINTING...' % (
-        cur_metric, (time.time() - start)))
+    logging.info('METRIC: %s. TIME: %.2fs CHECKPOINTING...' % (cur_metric, (time.time() - start)))
     avg_loss = np.mean(epoch_loss)
     epoch_loss = []
+    logging.info(f'Epoch took {time.time() - epoch_start_time} seconds')
 writer.close()
 
