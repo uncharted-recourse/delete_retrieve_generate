@@ -1,6 +1,6 @@
 import torch
 try:
-    from expected_bleu.TF_GOOGLE_NMT import compute_bleu
+    from modules.TF_GOOGLE_NMT import compute_bleu
 except:
     from TF_GOOGLE_NMT import compute_bleu
 from torch.autograd import Variable
