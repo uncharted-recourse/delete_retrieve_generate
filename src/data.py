@@ -298,16 +298,16 @@ def encode_text_data(lines,
         tokenizer = tokenizers[encoder].from_pretrained(
             tokenizer_weights[encoder], 
             cache_dir = cache_dir,
-            # bos_token = start_token,
-            # eos_token = stop_token,
+            bos_token = start_token,
+            eos_token = stop_token,
             # pad_token = pad_token,
             # additional_special_tokens = [empty_token]
         )
         
         # extra token for empty attribute lines in Delete+Retrieve
         special_tokens_dict = {
-            'bos_token': start_token,
-            'eos_token': stop_token,
+        #     'bos_token': start_token,
+        #     'eos_token': stop_token,
             'pad_token': pad_token,
             'additional_special_tokens': [empty_token]
         }

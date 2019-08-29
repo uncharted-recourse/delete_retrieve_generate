@@ -98,20 +98,22 @@ def decode_minibatch_greedy(max_len, start_id, model, src_input, srclens, srcmas
 
 # convert seqs to tokens
 def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
-    out = []
+    #out = []
     # take off the gpu
     tok_seqs = tok_seqs.cpu().numpy()
-    # convert to toks, cut off at </s>, delete any start tokens (preds were kickstarted w them)
-    for line in tok_seqs:
-        toks = tokenizer.decode(line)
-        toks = toks.split('<s>')
-        toks = toks[0] if len(toks) == 1 else toks[1]
-        toks = toks.split('</s>')[0]
-        out.append(toks)
+    # convert to toks, delete any special tokens (bos, eos, pad)
+    toks = [tokenizer.decode(line) for line in tok_seqs]
+    cleaned_toks = [tok.replace(tokenizer.bos_token, '').replace(tokenizer.eos_token, '').replace(tokenizer.pad_token, '') for tok in toks]
+    # for line in tok_seqs:
+    #     toks = tokenizer.decode(line)
+    #     toks = toks.split('<s>')
+    #     toks = toks[0] if len(toks) == 1 else toks[1]
+    #     toks = toks.split('</s>')[0]
+    #     out.append(toks)
     # unsort
     if sort:
-        out = data.unsort(out, indices)
-    return out
+        cleaned_toks = data.unsort(cleaned_toks, indices)
+    return cleaned_toks
 
 def generate_sequences(tokenizer, model, config, start_id, stop_id, input_content, input_aux, output):
     input_lines_src, output_lines_src, srclens, srcmask, indices = input_content
