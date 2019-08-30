@@ -129,13 +129,13 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
         # calculate loss
         if loss_crit == 'cross_entropy':
             bt_loss = loss_criterion(
-                decoder_logit.contiguous().view(-1, len(sr['tokenizer'])),
-                output_lines_tgt.view(-1)
+                bt_decoder_logit.contiguous().view(-1, len(src['tokenizer'])),
+                bt_output_lines_tgt.view(-1)
             )
         else:
-            bt_loss = bleu(decoder_probs, output_lines_tgt.cpu(), 
+            bt_loss = bleu(bt_decoder_probs, bt_output_lines_tgt.cpu(), 
                 torch.LongTensor([max_length] * batch_size),
-                tgtlens, smooth=True)[0]
+                bt_tgtlens, smooth=True)[0]
 
         # combine losses
         loss = (bt_ratio * bt_loss + loss) / 2
@@ -179,11 +179,14 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     # take off the gpu
     tok_seqs = tok_seqs.cpu().numpy()
     # convert to toks, delete any special tokens (bos, eos, pad)
-    start_token = data.get_start_token(tokenizer)
-    stop_token = data.get_stop_token(tokenizer)
-    decoded = [tokenizer.decode(line) for line in tok_seqs]
-    remove_start = [line[1:] if line[0] == start_token else line for line in decoded]
-    cleaned_toks = [line.split(stop_token)[0] for line in remove_start]    # for line in tok_seqs:
+    start_id = data.get_start_id(tokenizer)
+    stop_id = data.get_stop_id(tokenizer)
+    tok_seqs = [line[1:] if line[0] == start_id else line for line in tok_seqs]
+    print(f'tok seqs: {tok_seqs[0]}')
+    tok_seqs = [np.split(line, np.where(line == stop_id)[0])[0] for line in tok_seqs]
+    print(f'tok seqs: {tok_seqs[0]}')
+    tok_seqs = [tokenizer.decode(line) for line in tok_seqs]
+    print(f'tok seqs: {tok_seqs[0]}')
     #     toks = tokenizer.decode(line)
     #     toks = toks.split('<s>')
     #     toks = toks[0] if len(toks) == 1 else toks[1]
@@ -191,8 +194,9 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     #     out.append(toks)
     # unsort
     if sort:
-        cleaned_toks = data.unsort(cleaned_toks, indices)
-    return cleaned_toks
+         return data.unsort(tok_seqs, indices)
+    else:
+         return tok_seqs
 
 def generate_sequences(tokenizer, model, config, start_id, stop_id, input_content, input_aux, output):
     input_lines_src, output_lines_src, srclens, srcmask, indices = input_content

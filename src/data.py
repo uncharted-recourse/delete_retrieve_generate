@@ -480,11 +480,12 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     #   to compare across systems
 
     lines = [line[:max_len] for line in lines[index:index + batch_size]]
-
+    #print(f'lines: {lines}')
     if dist_measurer is not None:
         lines = sample_replace(lines, dist_measurer, sample_rate, index)
 
     lines = [tokenizer.encode(tokenizer.bos_token + " ".join(line) + tokenizer.eos_token) for line in lines]
+    #print(f'lines: {lines}')
     lens = [len(line) - 1 for line in lines]
     max_len = max(lens)
     
@@ -546,17 +547,24 @@ def back_translation_minibatch(src, tgt, config, idx, batch_size, max_len, model
         input_aux,
         output
     )
+    print(len(tgt_pred))
+    print(f'tgt_pred: {tgt_pred}')
     preds = evaluation.ids_to_toks(tgt_pred, tokenizer, sort=False)
+    print(f'preds: {preds[0]}')
     # get minibatch of decoded inputs, attributes, outputs in original style direction
     # extract attributes from tgt_pred
-    join_path = 'post_attribute_vocab.pkl' if use_src else 'pre_attribute_vocab.pkl'
-    attr_path = os.path.join(config['data']['vocab_dir'], join_path)
-    attr = pickle.load(open(attr_path, "rb"))
+    if config['data']['noise'] == 'dropout':
+        attr = None
+    else:
+        join_path = 'post_attribute_vocab.pkl' if use_src else 'pre_attribute_vocab.pkl'
+        attr_path = os.path.join(config['data']['vocab_dir'], join_path)
+        attr = pickle.load(open(attr_path, "rb"))
     _, content, _ = list(zip(
         *[extract_attributes(line, attr, config['data']['noise'], config['data']['dropout_prob'],
             config['data']['ngram_range'], config['data']['permutation']) for line in preds]
     ))
-
+    print(f'content: {content[0]}')
+    print(f"attr: {src['attribute'][0]}")
     # create back translation dictionary w/ correct key / value pairs
     dist_measurer = src['dist_measurer'] if use_src else tgt['dist_measurer']
     bt_src = {
