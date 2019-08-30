@@ -182,11 +182,8 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     start_id = data.get_start_id(tokenizer)
     stop_id = data.get_stop_id(tokenizer)
     tok_seqs = [line[1:] if line[0] == start_id else line for line in tok_seqs]
-    print(f'tok seqs: {tok_seqs[0]}')
     tok_seqs = [np.split(line, np.where(line == stop_id)[0])[0] for line in tok_seqs]
-    print(f'tok seqs: {tok_seqs[0]}')
     tok_seqs = [tokenizer.decode(line) for line in tok_seqs]
-    print(f'tok seqs: {tok_seqs[0]}')
     #     toks = tokenizer.decode(line)
     #     toks = toks.split('<s>')
     #     toks = toks[0] if len(toks) == 1 else toks[1]
