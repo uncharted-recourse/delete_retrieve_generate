@@ -96,7 +96,7 @@ batch_size = config['data']['batch_size']
 max_length = config['data']['max_len']
 src_vocab_size = tgt_vocab_size = len(src['tokenizer'])
 padding_id = data.get_padding_id(src['tokenizer'])
-assert padding_id == src['tokenizer'].vocab_size + 1
+assert padding_id == src['tokenizer'].vocab_size
 torch.manual_seed(config['training']['random_seed'])
 np.random.seed(config['training']['random_seed'])
 writer = SummaryWriter(working_dir)
@@ -173,8 +173,8 @@ for epoch in range(start_epoch, config['training']['epochs']):
         # calculate loss
         optimizer.zero_grad()
         loss_crit = config['training']['loss_criterion']
-        train_loss, _ = evaluation.calculate_loss(src, tgt, i, batch_size, max_length, 
-            config['model']['model_type'], loss_crit=loss_crit, bt_ratio = config['training']['bt_ratio'])
+        train_loss, _ = evaluation.calculate_loss(src, tgt, config, i, batch_size, max_length, 
+            config['model']['model_type'], model, loss_crit, bt_ratio = config['training']['bt_ratio'])
         loss_item = train_loss.item() if loss_crit == 'cross_entropy' else -train_loss.item()
         losses.append(loss_item)
         losses_since_last_report.append(loss_item)

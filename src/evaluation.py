@@ -11,7 +11,7 @@ import heapq
 from src import data
 from src.cuda import CUDA
 from src.callbacks import mean_masked_entropy
-
+import random
 import time
 
 import os
@@ -69,7 +69,7 @@ def get_edit_distance(hypotheses, reference):
 
     return ed * 1.0 / len(hypotheses)
 
-def calculate_loss(src, tgt, i, batch_size, max_length, model_type, loss_crit = 'cross_entropy', bt_ratio = 1):
+def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, model, loss_crit = 'cross_entropy', bt_ratio = 1):
     
     use_src = random.random() < 0.5
 
@@ -85,8 +85,9 @@ def calculate_loss(src, tgt, i, batch_size, max_length, model_type, loss_crit = 
         input_ids_aux, auxlens, auxmask)
 
     # get backtranslation minibatch
-    bt_input_content, bt_input_aux, bt_output = data.back_translation_minibatch(
-        src, tgt, config, i, batch_size, max_length, model_type, use_src=use_src)
+    if bt_ratio > 0:
+        bt_input_content, bt_input_aux, bt_output = data.back_translation_minibatch(
+            src, tgt, config, i, batch_size, max_length, model,  model_type, use_src=use_src)
     bt_input_lines_src, _, bt_srclens, bt_srcmask, _ = bt_input_content
     bt_input_ids_aux, _, bt_auxlens, bt_auxmask, _ = bt_input_aux
     bt_input_lines_tgt, bt_output_lines_tgt, bt_tgtlens, _, _ = bt_output
@@ -312,8 +313,8 @@ def evaluate_lpp(model, src, tgt, config):
         sys.stdout.flush()
 
         loss_crit = config['training']['loss_criterion']
-        combined_loss, combined_mean_entropy = calculate_loss(src, tgt, j, config['data']['batch_size'], config['data']['max_len'], 
-            config['model']['model_type'], loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'])
+        combined_loss, combined_mean_entropy = calculate_loss(src, tgt, config, j, config['data']['batch_size'], config['data']['max_len'], 
+            config['model']['model_type'], model, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'])
 
         loss_item = combined_loss.item() if loss_crit == 'cross_entropy' else -combined_loss.item()
         losses.append(loss_item)

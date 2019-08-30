@@ -479,10 +479,10 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     if dist_measurer is not None:
         lines = sample_replace(lines, dist_measurer, sample_rate, index)
 
-    lens = [len(line) + 1 for line in lines]
+    lines = [tokenizer.encode(tokenizer.bos_token + " ".join(line) + tokenizer.eos_token) for line in lines]
+    lens = [len(line) - 1 for line in lines]
     max_len = max(lens)
-    lines = [tokenizer.encode(tokenizer.bos_token + " ".join(line) + tokenizer.eos_token)]
-
+    
     input_lines = [
         line[:-1] +
         [get_padding_id(tokenizer)] * (max_len - len(line) + 1)
@@ -535,13 +535,13 @@ def back_translation_minibatch(src, tgt, config, idx, batch_size, max_len, model
         tokenizer,
         model, 
         config,
-        data.get_start_id(tokenizer),
-        data.get_stop_id(tokenizer),
+        get_start_id(tokenizer),
+        get_stop_id(tokenizer),
         input_content,
         input_aux,
         output
     )
-
+    preds = evaluation.ids_to_toks(tgt_pred, tokenizer, sort=False)
     # get minibatch of decoded inputs, attributes, outputs in original style direction
     # extract attributes from tgt_pred
     join_path = 'post_attribute_vocab.pkl' if use_src else 'pre_attribute_vocab.pkl'
@@ -549,7 +549,7 @@ def back_translation_minibatch(src, tgt, config, idx, batch_size, max_len, model
     attr = pickle.load(open(attr_path, "rb"))
     _, content, _ = list(zip(
         *[extract_attributes(line, attr, config['data']['noise'], config['data']['dropout_prob'],
-            config['data']['ngram_range'], config['data']['permutation']) for line in tgt_pred]
+            config['data']['ngram_range'], config['data']['permutation']) for line in preds]
     ))
 
     # create back translation dictionary w/ correct key / value pairs
