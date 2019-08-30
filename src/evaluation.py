@@ -83,19 +83,7 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
     decoder_logit, decoder_probs = model(
         input_lines_src, input_lines_tgt, srcmask, srclens,
         input_ids_aux, auxlens, auxmask)
-
-    # get backtranslation minibatch
-    if bt_ratio > 0:
-        bt_input_content, bt_input_aux, bt_output = data.back_translation_minibatch(
-            src, tgt, config, i, batch_size, max_length, model,  model_type, use_src=use_src)
-    bt_input_lines_src, _, bt_srclens, bt_srcmask, _ = bt_input_content
-    bt_input_ids_aux, _, bt_auxlens, bt_auxmask, _ = bt_input_aux
-    bt_input_lines_tgt, bt_output_lines_tgt, bt_tgtlens, _, _ = bt_output
     
-    bt_decoder_logit, bt_decoder_probs = model(
-        bt_input_lines_src, bt_input_lines_tgt, bt_srcmask, bt_srclens,
-        bt_input_ids_aux, bt_auxlens, bt_auxmask)
-
     # calculate loss on two minibatches separately, weight losses w/ ratio
     weight_mask = torch.ones(len(src['tokenizer']))
     if CUDA:
@@ -110,14 +98,10 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
             loss_criterion = loss_criterion.cuda()
     elif loss_crit != 'expected_bleu':
         raise NotImplementedError("Loss criterion not supported for this task")
-    
-    # calculate losses and combine
+
+    # calculate loss 
     if loss_crit == 'cross_entropy':
         loss = loss_criterion(
-            decoder_logit.contiguous().view(-1, tgt_vocab_size),
-            output_lines_tgt.view(-1)
-        )
-        bt_loss = loss_criterion(
             decoder_logit.contiguous().view(-1, tgt_vocab_size),
             output_lines_tgt.view(-1)
         )
@@ -126,18 +110,42 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
         loss = bleu(decoder_probs, output_lines_tgt.cpu(), 
             torch.LongTensor([max_length] * batch_size),
             tgtlens , smooth=True)[0]
-        bt_loss = bleu(decoder_probs, output_lines_tgt.cpu(), 
-            torch.LongTensor([max_length] * batch_size),
-            tgtlens, smooth=True)[0]
-    combined_loss = (bt_ratio * bt_loss + loss) / 2
 
-    # calculate mean entropy callback
-    mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
-    bt_mean_entropy = mean_masked_entropy(bt_decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
-    combined_mean_entropy = (bt_ratio * bt_mean_entropy + mean_entropy) / 2
+        # mean entropy
+        mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
 
+    # get backtranslation minibatch
+    if bt_ratio > 0:
+        bt_input_content, bt_input_aux, bt_output = data.back_translation_minibatch(
+            src, tgt, config, i, batch_size, max_length, model,  model_type, use_src=use_src)
+        bt_input_lines_src, _, bt_srclens, bt_srcmask, _ = bt_input_content
+        bt_input_ids_aux, _, bt_auxlens, bt_auxmask, _ = bt_input_aux
+        bt_input_lines_tgt, bt_output_lines_tgt, bt_tgtlens, _, _ = bt_output
+        
+        bt_decoder_logit, bt_decoder_probs = model(
+            bt_input_lines_src, bt_input_lines_tgt, bt_srcmask, bt_srclens,
+            bt_input_ids_aux, bt_auxlens, bt_auxmask)
+        
+        # calculate loss
+        if loss_crit == 'cross_entropy':
+            bt_loss = loss_criterion(
+                decoder_logit.contiguous().view(-1, tgt_vocab_size),
+                output_lines_tgt.view(-1)
+            )
+        else:
+            bt_loss = bleu(decoder_probs, output_lines_tgt.cpu(), 
+                torch.LongTensor([max_length] * batch_size),
+                tgtlens, smooth=True)[0]
+
+        # combine losses
+        loss = (bt_ratio * bt_loss + loss) / 2
+
+        # mean entropy
+        bt_mean_entropy = mean_masked_entropy(bt_decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
+        mean_entropy = (bt_ratio * bt_mean_entropy + mean_entropy) / 2
+ 
     # return combined loss and combined mean entropy
-    return combined_loss, combined_mean_entropy
+    return loss, mean_entropy
 
 def decode_minibatch_greedy(max_len, start_id, model, src_input, srclens, srcmask,
         aux_input, auxlens, auxmask):

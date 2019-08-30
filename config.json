@@ -4,11 +4,12 @@
     "scheduler": "plateau",
     "learning_rate": 0.0003,
     "max_norm": 3.0,
-    "epochs": 100,
+    "epochs": 25,
     "batches_per_report": 200,
     "batches_per_sampling": 500,
     "random_seed": 1,
-    "loss_criterion": "cross_entropy"
+    "loss_criterion": "cross_entropy",
+    "bt_ratio": 0
   },
   "data": {
     "src": "data/gyafc_raw/sentiment.train.0",

@@ -391,8 +391,13 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
     # we never need to do the TFIDF thing with the source because 
     # test time is strictly in the src => tgt direction. 
     # But we still both src and tgt dist measurers because training is bidirectional
-    #  (i.e., we're autoencoding src and tgt sentences during training)
+    #  (i.e., we're autoencoding src and tgt sentences during training)        
     if train_src is None or train_tgt is None:
+        
+        # dont replace with random attributes in dropout noising
+        if config['data']['noise'] == 'dropout':
+            src_dist_measurer = tgt_dist_measurer = None
+
         src_dist_measurer = CorpusSearcher(
             query_corpus=[' '.join(x) for x in src_attribute],
             key_corpus=[' '.join(x) for x in src_attribute],
