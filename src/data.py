@@ -159,16 +159,16 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
 
     # do noisy masking according to Lample et. al (2017)
     if noise == 'dropout':
-        content = ''
-        attribute_markers = ''
+        content = []
+        attribute_markers = []
         # word dropout with probability
         for tok in line:
             if np.random.random_sample() > dropout_prob:
-                content += ' ' + tok 
+                content.append(tok)
             else:
                 # TODO: maybe just dropout
                 # we set non content tokens as attribute tokens, allows replacement in noising model
-                attribute_markers += ' ' + tok
+                attribute_markers.append(tok)
 
     elif noise == 'ngram_attributes':
         # generate all ngrams for the sentence
@@ -195,27 +195,27 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
 
         candidate_markers = [marker for (marker, score) in candidate_markers]
         # delete based on highest score first
-        attribute_markers = ''
+        attribute_markers = []
         for marker in candidate_markers:
             if marker in content:
-                attribute_markers +=  ' ' + marker
+                attribute_markers.append(marker.split())
                 content = content.replace(marker, "")
-        #content = content.split()
+        content = content.split()
         
     elif noise == 'word_attributes':
-        content = ''
-        attribute_markers = ''
+        content = []
+        attribute_markers = []
         for tok in line:
             if tok in attribute_vocab:
-                attribute_markers += ' ' + tok
+                attribute_markers.append(tok)
             else:
-                content += ' ' + tok
+                content.append(tok)
     else:
         raise Exception('Noising strategy must be one of "dropout", "word_attributes", or "ngram_attributes"')
     
     # permutation with parameter k for content words not dropped
     q = np.random.uniform(0, permutation + 1, len(content))
-    content = " ".join([tok for _, tok in sorted(zip(q,content.split()))])
+    content = [tok for _, tok in sorted(zip(q,content))]
 
     return line, content, attribute_markers
 
@@ -474,7 +474,7 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     # FORCE NO SORTING because we care about the order of outputs
     #   to compare across systems
 
-    lines = [line.split()[:max_len] for line in lines[index:index + batch_size]]
+    lines = [line[:max_len] for line in lines[index:index + batch_size]]
 
     if dist_measurer is not None:
         lines = sample_replace(lines, dist_measurer, sample_rate, index)

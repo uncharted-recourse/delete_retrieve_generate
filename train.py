@@ -174,7 +174,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         optimizer.zero_grad()
         loss_crit = config['training']['loss_criterion']
         train_loss, _ = evaluation.calculate_loss(src, tgt, i, batch_size, max_length, 
-            config['model']['model_type'], loss_crit=loss_crit, config['training']['bt_ratio'])
+            config['model']['model_type'], loss_crit=loss_crit, bt_ratio = config['training']['bt_ratio'])
         loss_item = train_loss.item() if loss_crit == 'cross_entropy' else -train_loss.item()
         losses.append(loss_item)
         losses_since_last_report.append(loss_item)

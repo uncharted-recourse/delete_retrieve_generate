@@ -313,7 +313,7 @@ def evaluate_lpp(model, src, tgt, config):
 
         loss_crit = config['training']['loss_criterion']
         combined_loss, combined_mean_entropy = calculate_loss(src, tgt, j, config['data']['batch_size'], config['data']['max_len'], 
-            config['model']['model_type'], loss_crit=loss_crit, config['training']['bt_ratio'])
+            config['model']['model_type'], loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'])
 
         loss_item = combined_loss.item() if loss_crit == 'cross_entropy' else -combined_loss.item()
         losses.append(loss_item)
