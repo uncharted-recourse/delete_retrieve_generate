@@ -297,7 +297,8 @@ class FusedSeqModel(SeqModel):
         # join language model and s2s model
         self.join_method = join_method
         if self.join_method == "add":
-            self.multp = nn.Parameter(torch.rand(1))
+            self.multp = nn.Parameter(torch.zeros(1))
+            #self.multp = nn.Parameter(torch.rand(1))
         elif self.join_method == "gate":
             self.lm_sigmoid = nn.Sigmoid()
         else:

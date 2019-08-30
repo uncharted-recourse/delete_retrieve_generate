@@ -393,11 +393,6 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
     # But we still both src and tgt dist measurers because training is bidirectional
     #  (i.e., we're autoencoding src and tgt sentences during training)        
     if train_src is None or train_tgt is None:
-        
-        # dont replace with random attributes in dropout noising
-        if config['data']['noise'] == 'dropout':
-            src_dist_measurer = tgt_dist_measurer = None
-
         src_dist_measurer = CorpusSearcher(
             query_corpus=[' '.join(x) for x in src_attribute],
             key_corpus=[' '.join(x) for x in src_attribute],
@@ -450,6 +445,7 @@ def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
     """
 
     out = [None for _ in range(len(lines))]
+    replace_count = 0
     for i, line in enumerate(lines):
         if random.random() < sample_rate:
             # top match is the current line
@@ -467,9 +463,10 @@ def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
 
         # corner case: special tok for empty sequences (just start/end tok)
         if len(line) == 0:
+            replace_count += 1
             line.insert(1, tokenizer.additional_special_tokens[0])
         out[i] = line
-
+    print(f'REPLACE_COUNT: {replace_count}')
     return out
 
 

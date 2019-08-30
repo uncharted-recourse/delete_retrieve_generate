@@ -175,23 +175,15 @@ def decode_minibatch_greedy(max_len, start_id, model, src_input, srclens, srcmas
 
 # convert seqs to tokens
 def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
-    #out = []
     # take off the gpu
     tok_seqs = tok_seqs.cpu().numpy()
     # convert to toks, delete any special tokens (bos, eos, pad)
     start_id = data.get_start_id(tokenizer)
     stop_id = data.get_stop_id(tokenizer)
     tok_seqs = [line[1:] if line[0] == start_id else line for line in tok_seqs]
-    #print(f'tok seqs: {tok_seqs[0]}')
     tok_seqs = [np.split(line, np.where(line == stop_id)[0])[0] for line in tok_seqs]
-    #print(f'tok seqs: {tok_seqs[0]}')
     tok_seqs = [tokenizer.decode(line) for line in tok_seqs]
-    #print(f'tok seqs: {tok_seqs[0]}')
-    #     toks = tokenizer.decode(line)
-    #     toks = toks.split('<s>')
-    #     toks = toks[0] if len(toks) == 1 else toks[1]
-    #     toks = toks.split('</s>')[0]
-    #     out.append(toks)
+    
     # unsort
     if sort:
          return data.unsort(tok_seqs, indices)
