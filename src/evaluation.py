@@ -102,7 +102,7 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
     # calculate loss 
     if loss_crit == 'cross_entropy':
         loss = loss_criterion(
-            decoder_logit.contiguous().view(-1, tgt_vocab_size),
+            decoder_logit.contiguous().view(-1, len(src['tokenizer'])),
             output_lines_tgt.view(-1)
         )
     else:
@@ -111,8 +111,8 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
             torch.LongTensor([max_length] * batch_size),
             tgtlens , smooth=True)[0]
 
-        # mean entropy
-        mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
+    # mean entropy
+    mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
 
     # get backtranslation minibatch
     if bt_ratio > 0:
@@ -129,7 +129,7 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
         # calculate loss
         if loss_crit == 'cross_entropy':
             bt_loss = loss_criterion(
-                decoder_logit.contiguous().view(-1, tgt_vocab_size),
+                decoder_logit.contiguous().view(-1, len(sr['tokenizer'])),
                 output_lines_tgt.view(-1)
             )
         else:
