@@ -445,7 +445,7 @@ def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
     """
 
     out = [None for _ in range(len(lines))]
-    replace_count = 0
+    #replace_count = 0
     for i, line in enumerate(lines):
         if random.random() < sample_rate:
             # top match is the current line
@@ -463,10 +463,10 @@ def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
 
         # corner case: special tok for empty sequences (just start/end tok)
         if len(line) == 0:
-            replace_count += 1
+            #replace_count += 1
             line.insert(1, tokenizer.additional_special_tokens[0])
         out[i] = line
-    print(f'REPLACE_COUNT: {replace_count}')
+    #print(f'REPLACE_COUNT: {replace_count}')
     return out
 
 
@@ -475,15 +475,13 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     """Prepare minibatch."""
     # FORCE NO SORTING because we care about the order of outputs
     #   to compare across systems
-    #print(f'len lines: {len(lines)}')
+
     lines = [line[:max_len] for line in lines[index:index + batch_size]]
-    #print(f'lines: {lines[0]}')
+
     if dist_measurer is not None:
         lines = sample_replace(lines, dist_measurer, sample_rate, index)
 
     lines = [tokenizer.encode(tokenizer.bos_token + " ".join(line) + tokenizer.eos_token) for line in lines]
-    #print(f'lines: {lines[0]}')
-    #print(f'lines: {lines}')
     lens = [len(line) - 1 for line in lines]
     max_len = max(lens)
     
@@ -528,7 +526,6 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
 
 def back_translation_minibatch(src, tgt, config, idx, batch_size, max_len, model, model_type, use_src = True):
 
-    s = time.time()
     # get minibatch of inputs, attributes, outputs in other style direction
     input_content, input_aux, output = minibatch(
         src, tgt, idx, batch_size, max_len, config['model']['model_type'], use_src = use_src, is_bt = True)
@@ -549,6 +546,7 @@ def back_translation_minibatch(src, tgt, config, idx, batch_size, max_len, model
     )
     logging.info(f'Predicting one BT minibatch took {time.time() - s} seconds')
     preds = evaluation.ids_to_toks(tgt_pred, tokenizer, sort=False)
+
     # get minibatch of decoded inputs, attributes, outputs in original style direction
     # extract attributes from tgt_pred
     if config['data']['noise'] == 'dropout':
@@ -561,8 +559,9 @@ def back_translation_minibatch(src, tgt, config, idx, batch_size, max_len, model
         *[extract_attributes(line.split(), attr, config['data']['noise'], config['data']['dropout_prob'],
             config['data']['ngram_range'], config['data']['permutation']) for line in preds]
     ))
-    print(f'content: {content[0]}')
-    print(f"attr: {src['attribute'][0]}")
+    # print(f'content: {content[0]}')
+    # print(f"attr: {src['attribute'][0]}")
+
     # create back translation dictionary w/ correct key / value pairs
     dist_measurer = src['dist_measurer'] if use_src else tgt['dist_measurer']
     bt_src = {
@@ -572,9 +571,8 @@ def back_translation_minibatch(src, tgt, config, idx, batch_size, max_len, model
         'tokenizer': tokenizer,
         'dist_measurer': dist_measurer
     }
-    bt_minibatch = minibatch(bt_src, tgt, 0, batch_size, max_len, config['model']['model_type'], use_src = use_src)
     # set is_bt false, translate in same direction for evaluation
-    logging.info(f'Producing one BT minibatch took {time.time() - s} seconds')
+    bt_minibatch = minibatch(bt_src, tgt, 0, batch_size, max_len, config['model']['model_type'], use_src = use_src)
     return bt_minibatch
 
 def minibatch(src, tgt, idx, batch_size, max_len, model_type, use_src = True, is_test=False, is_bt = False):
