@@ -69,6 +69,74 @@ def get_edit_distance(hypotheses, reference):
 
     return ed * 1.0 / len(hypotheses)
 
+def calculate_loss(src, tgt, i, batch_size, max_length, model_type, loss_crit = 'cross_entropy', bt_ratio = 1):
+    
+    use_src = random.random() < 0.5
+
+    # get normal minibatch
+    input_content, input_aux, output = data.minibatch(
+        src, tgt, i, batch_size, max_length, model_type, use_src=use_src)
+    input_lines_src, _, srclens, srcmask, _ = input_content
+    input_ids_aux, _, auxlens, auxmask, _ = input_aux
+    input_lines_tgt, output_lines_tgt, tgtlens, _, _ = output
+    
+    decoder_logit, decoder_probs = model(
+        input_lines_src, input_lines_tgt, srcmask, srclens,
+        input_ids_aux, auxlens, auxmask)
+
+    # get backtranslation minibatch
+    bt_input_content, bt_input_aux, bt_output = data.back_translation_minibatch(
+        src, tgt, config, i, batch_size, max_length, model_type, use_src=use_src)
+    bt_input_lines_src, _, bt_srclens, bt_srcmask, _ = bt_input_content
+    bt_input_ids_aux, _, bt_auxlens, bt_auxmask, _ = bt_input_aux
+    bt_input_lines_tgt, bt_output_lines_tgt, bt_tgtlens, _, _ = bt_output
+    
+    bt_decoder_logit, bt_decoder_probs = model(
+        bt_input_lines_src, bt_input_lines_tgt, bt_srcmask, bt_srclens,
+        bt_input_ids_aux, bt_auxlens, bt_auxmask)
+
+    # calculate loss on two minibatches separately, weight losses w/ ratio
+    weight_mask = torch.ones(len(src['tokenizer']))
+    if CUDA:
+        weight_mask = weight_mask.cuda()
+    padding_id = data.get_padding_id(src['tokenizer'])
+    weight_mask[padding_id] = 0
+    
+    # define loss criterion
+    if loss_crit == 'cross_entropy':
+        loss_criterion = nn.CrossEntropyLoss(weight=weight_mask)
+        if CUDA:
+            loss_criterion = loss_criterion.cuda()
+    elif loss_crit != 'expected_bleu':
+        raise NotImplementedError("Loss criterion not supported for this task")
+    
+    # calculate losses and combine
+    if loss_crit == 'cross_entropy':
+        loss = loss_criterion(
+            decoder_logit.contiguous().view(-1, tgt_vocab_size),
+            output_lines_tgt.view(-1)
+        )
+        bt_loss = loss_criterion(
+            decoder_logit.contiguous().view(-1, tgt_vocab_size),
+            output_lines_tgt.view(-1)
+        )
+    else:
+        # calculate lb expected bleu loss with max_order ngrams of 4 independent of ngram_range in config
+        loss = bleu(decoder_probs, output_lines_tgt.cpu(), 
+            torch.LongTensor([max_length] * batch_size),
+            tgtlens , smooth=True)[0]
+        bt_loss = bleu(decoder_probs, output_lines_tgt.cpu(), 
+            torch.LongTensor([max_length] * batch_size),
+            tgtlens, smooth=True)[0]
+    combined_loss = (bt_ratio * bt_loss + loss) / 2
+
+    # calculate mean entropy callback
+    mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
+    bt_mean_entropy = mean_masked_entropy(bt_decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
+    combined_mean_entropy = (bt_ratio * bt_mean_entropy + mean_entropy) / 2
+
+    # return combined loss and combined mean entropy
+    return combined_loss, combined_mean_entropy
 
 def decode_minibatch_greedy(max_len, start_id, model, src_input, srclens, srcmask,
         aux_input, auxlens, auxmask):
@@ -102,9 +170,11 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     # take off the gpu
     tok_seqs = tok_seqs.cpu().numpy()
     # convert to toks, delete any special tokens (bos, eos, pad)
-    toks = [tokenizer.decode(line) for line in tok_seqs]
-    cleaned_toks = [tok.replace(tokenizer.bos_token, '').replace(tokenizer.eos_token, '').replace(tokenizer.pad_token, '').replace('<|endoftext|>', '') for tok in toks]
-    # for line in tok_seqs:
+    start_token = data.get_start_token(tokenizer)
+    stop_token = data.get_stop_token(tokenizer)
+    decoded = [tokenizer.decode(line) for line in tok_seqs]
+    remove_start = [line[1:] if line[0] == start_token else line for line in decoded]
+    cleaned_toks = [line.split(stop_token)[0] for line in remove_start]    # for line in tok_seqs:
     #     toks = tokenizer.decode(line)
     #     toks = toks.split('<s>')
     #     toks = toks[0] if len(toks) == 1 else toks[1]
@@ -179,7 +249,7 @@ def decode_dataset(model, src, tgt, config):
         sys.stdout.flush()
 
         # get batch
-        input_content, input_aux, output = data.minibatch(
+        input_content, input_aux, output, = data.minibatch(
             src, tgt, j, 
             config['data']['batch_size'], 
             config['data']['max_len'], 
@@ -236,45 +306,19 @@ def evaluate_lpp(model, src, tgt, config):
     """ evaluate log perplexity WITHOUT decoding
         (i.e., with teacher forcing)
     """
-    weight_mask = torch.ones(len(tgt['tokenizer']))
-    if CUDA:
-        weight_mask = weight_mask.cuda()
-    padding_id = data.get_padding_id(src['tokenizer'])
-    weight_mask[padding_id] = 0
-    loss_criterion = nn.CrossEntropyLoss(weight=weight_mask)
-    if CUDA:
-        loss_criterion = loss_criterion.cuda()
-
     losses = []
     for j in range(0, len(src['data']), config['data']['batch_size']):
         sys.stdout.write("\r%s/%s..." % (j, len(src['data'])))
         sys.stdout.flush()
 
-        # get batch
-        input_content, input_aux, output = data.minibatch(
-            src, tgt, j, 
-            config['data']['batch_size'], 
-            config['data']['max_len'], 
-            config['model']['model_type'],
-            is_test=True)
+        loss_crit = config['training']['loss_criterion']
+        combined_loss, combined_mean_entropy = calculate_loss(src, tgt, j, config['data']['batch_size'], config['data']['max_len'], 
+            config['model']['model_type'], loss_crit=loss_crit, config['training']['bt_ratio'])
 
-        input_lines_src, _, srclens, srcmask, _ = input_content
-        input_ids_aux, _, auxlens, auxmask, _ = input_aux
-        input_lines_tgt, output_lines_tgt, _, _, _ = output
-        decoder_logit, decoder_probs = model(
-            input_lines_src, input_lines_tgt, srcmask, srclens,
-            input_ids_aux, auxlens, auxmask)
+        loss_item = combined_loss.item() if loss_crit == 'cross_entropy' else -combined_loss.item()
+        losses.append(loss_item)
 
-        # call mean entropy callback and write to tensorboard
-        mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
-
-        loss = loss_criterion(
-            decoder_logit.contiguous().view(-1, len(tgt['tokenizer'])),
-            output_lines_tgt.view(-1)
-        )
-        losses.append(loss.item())
-
-    return np.mean(losses), mean_entropy
+    return np.mean(losses), combined_mean_entropy
 
 def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True, remove_attributes = True):
 

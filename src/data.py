@@ -159,16 +159,16 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
 
     # do noisy masking according to Lample et. al (2017)
     if noise == 'dropout':
-        content = []
-        attribute_markers = []
+        content = ''
+        attribute_markers = ''
         # word dropout with probability
         for tok in line:
             if np.random.random_sample() > dropout_prob:
-                content.append(tok)
+                content += ' ' + tok 
             else:
                 # TODO: maybe just dropout
                 # we set non content tokens as attribute tokens, allows replacement in noising model
-                attribute_markers.append(tok)
+                attribute_markers += ' ' + tok
 
     elif noise == 'ngram_attributes':
         # generate all ngrams for the sentence
@@ -195,27 +195,27 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
 
         candidate_markers = [marker for (marker, score) in candidate_markers]
         # delete based on highest score first
-        attribute_markers = []
+        attribute_markers = ''
         for marker in candidate_markers:
             if marker in content:
-                attribute_markers.extend(marker.split())
+                attribute_markers +=  ' ' + marker
                 content = content.replace(marker, "")
-        content = content.split()
+        #content = content.split()
         
     elif noise == 'word_attributes':
-        content = []
-        attribute_markers = []
+        content = ''
+        attribute_markers = ''
         for tok in line:
             if tok in attribute_vocab:
-                attribute_markers.append(tok)
+                attribute_markers += ' ' + tok
             else:
-                content.append(tok)
+                content += ' ' + tok
     else:
         raise Exception('Noising strategy must be one of "dropout", "word_attributes", or "ngram_attributes"')
     
-    # permutation with parameter k for words not dropped
+    # permutation with parameter k for content words not dropped
     q = np.random.uniform(0, permutation + 1, len(content))
-    content = [tok for _, tok in sorted(zip(q,content))]
+    content = " ".join([tok for _, tok in sorted(zip(q,content.split()))])
 
     return line, content, attribute_markers
 
@@ -269,8 +269,13 @@ def get_stop_id(tokenizer):
 def get_empty_id(tokenizer):
     return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[0])
 
-def encode_text_data(lines, 
-    encoder = 'gpt2',
+def get_start_token(tokenizer):
+    return tokenizer.decode(tokenizer.encode(tokenizer.bos_token))
+
+def get_stop_token(tokenizer):
+    return tokenizer.decode(tokenizer.encode(tokenizer.eos_token))
+
+def get_tokenizer(encoder = 'gpt2',
     start_token = '<s>',
     stop_token = '</s>',
     pad_token = '<pad>',
@@ -313,25 +318,25 @@ def encode_text_data(lines,
         }
         tokenizer.add_special_tokens(special_tokens_dict)
 
-    tokenized_lines = [[str(e) for e in tokenizer.encode(line)] for line in lines]
-    return tokenized_lines, tokenizer
+    #tokenized_lines = [[str(e) for e in tokenizer.encode(line)] for line in lines]
+    return tokenizer
 
 def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, cache_dir = None):
 
     # 1. Tokenize raw text data
-    tokenized_src_lines, tokenizer = encode_text_data(src_lines, 
-        encoder = config['data']['tokenizer'], 
-        cache_dir=cache_dir
-    )
-    tokenized_tgt_lines, _ = encode_text_data(tgt_lines, 
-        encoder = config['data']['tokenizer'], 
-        cache_dir=cache_dir
-    )
-    tokenized_src_corpus = [w for line in tokenized_src_lines for w in line]
-    tokenized_tgt_corpus = [w for line in tokenized_tgt_lines for w in line]
-    tokenized_vocab = np.unique(np.array(tokenized_src_corpus + tokenized_tgt_corpus))
+    # tokenized_src_lines, tokenizer = encode_text_data(src_lines, 
+    #     encoder = config['data']['tokenizer'], 
+    #     cache_dir=cache_dir
+    # )
+    # tokenized_tgt_lines, _ = encode_text_data(tgt_lines, 
+    #     encoder = config['data']['tokenizer'], 
+    #     cache_dir=cache_dir
+    # )
+    # tokenized_src_corpus = [w for line in tokenized_src_lines for w in line]
+    # tokenized_tgt_corpus = [w for line in tokenized_tgt_lines for w in line]
+    # tokenized_vocab = np.unique(np.array(tokenized_src_corpus + tokenized_tgt_corpus))
 
-    # 2. Perform noising
+    # 1. Perform noising
     # A.  do noisy masking according to Lample et. al (2017) - in extract_attributes()
     if config['data']['noise'] == 'dropout':
         pre_attr = post_attr = None
@@ -346,9 +351,12 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
             pre_attr = pickle.load(open(pre_attr_path, "rb"))
             post_attr = pickle.load(open(post_attr_path, "rb"))
         else:
-            sc = SalienceCalculator(tokenized_src_corpus, tokenized_tgt_corpus)
+            src_corpus = [w for line in src_lines for w in line]
+            tgt_corpus = [w for line in tgt_lines for w in line]
+            corpus_vocab = np.unique(np.array(src_corpus + tgt_corpus))
+            sc = SalienceCalculator(src_corpus, tgt_corpus)
             # extract attributes 
-            pre_attr = post_attr = set([tok for tok in tokenized_vocab if max(sc.salience(tok, attribute='pre'), sc.salience(tok, attribute='post')) > config['data']['salience_threshold']])
+            pre_attr = post_attr = set([tok for tok in corpus_vocab if max(sc.salience(tok, attribute='pre'), sc.salience(tok, attribute='post')) > config['data']['salience_threshold']])
             pickle.dump(pre_attr, open(pre_attr_path, "wb"))
             pickle.dump(post_attr, open(post_attr_path, "wb"))
 
@@ -362,21 +370,21 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
             pre_attr = pickle.load(open(pre_attr_path, "rb"))
             post_attr = pickle.load(open(post_attr_path, "rb"))
         else:
-            pre_attr, post_attr = calculate_ngram_attribute_vocab(tokenized_src_lines, 
-                tokenized_tgt_lines,
+            pre_attr, post_attr = calculate_ngram_attribute_vocab(src_lines, 
+                tgt_lines,
                 config['data']['salience_threshold'], 
                 config['data']['ngram_range'])
             pickle.dump(pre_attr, open(pre_attr_path, "wb"))
             pickle.dump(post_attr, open(post_attr_path, "wb"))
     
-    # 3. Extract attributes:
+    # 2. Extract attributes:
     src_lines, src_content, src_attribute = list(zip(
         *[extract_attributes(line, pre_attr, config['data']['noise'], config['data']['dropout_prob'],
-            config['data']['ngram_range'], config['data']['permutation']) for line in tokenized_src_lines]
+            config['data']['ngram_range'], config['data']['permutation']) for line in src_lines]
     ))
     tgt_lines, tgt_content, tgt_attribute = list(zip(
         *[extract_attributes(line, post_attr, config['data']['noise'], config['data']['dropout_prob'],
-            config['data']['ngram_range'], config['data']['permutation']) for line in tokenized_tgt_lines]
+            config['data']['ngram_range'], config['data']['permutation']) for line in tgt_lines]
     ))
 
     # train time: just pick attributes that are close to the current (using word distance)
@@ -416,6 +424,9 @@ def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, 
             make_binary=False
         )
     
+    # instantiate tokenizer
+    tokenizer = get_tokenizer(encoder = config['data']['tokenizer'], cache_dir=cache_dir)
+
     # create dictionaries of src and tgt data
     src = {
         'data': src_lines, 'content': src_content, 'attribute': src_attribute,
@@ -432,9 +443,6 @@ def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
     replace sample_rate * batch_size lines with nearby examples (according to dist_measurer)
     not exactly the same as the paper (words shared instead of jaccaurd during train) but same idea
     """
-    start_id = get_start_id(tokenizer)
-    stop_id = get_stop_id(tokenizer)
-    empty_id = get_empty_id(tokenizer)
 
     out = [None for _ in range(len(lines))]
     for i, line in enumerate(lines):
@@ -450,11 +458,11 @@ def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
             # all the matches are blanks
             except StopIteration:
                 line = []
-            line = [start_id] + line + [stop_id]
+            #line = line
 
         # corner case: special tok for empty sequences (just start/end tok)
-        if len(line) == 2:
-            line.insert(1, empty_id)
+        if len(line) == 0:
+            line.insert(1, tokenizer.additional_special_tokens[0])
         out[i] = line
 
     return out
@@ -465,30 +473,25 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     """Prepare minibatch."""
     # FORCE NO SORTING because we care about the order of outputs
     #   to compare across systems
-    padding_id = get_padding_id(tokenizer)
-    start_id = get_start_id(tokenizer)
-    stop_id = get_stop_id(tokenizer)
 
-    lines = [
-        [start_id] + line[:max_len] + [stop_id]
-        for line in lines[index:index + batch_size]
-    ]
+    lines = [line.split()[:max_len] for line in lines[index:index + batch_size]]
 
     if dist_measurer is not None:
         lines = sample_replace(lines, dist_measurer, sample_rate, index)
 
-    lens = [len(line) for line in lines]
+    lens = [len(line) + 1 for line in lines]
     max_len = max(lens)
+    lines = [tokenizer.encode(tokenizer.bos_token + " ".join(line) + tokenizer.eos_token)]
 
     input_lines = [
-        [int(w) for w in line[:-1]] +
-        [padding_id] * (max_len - len(line) + 1)
+        line[:-1] +
+        [get_padding_id(tokenizer)] * (max_len - len(line) + 1)
         for line in lines
     ]
 
     output_lines = [
-        [int(w) for w in line[1:]] +
-        [padding_id] * (max_len - len(line) + 1)
+        line[1:] +
+        [get_padding_id(tokenizer)] * (max_len - len(line) + 1)
         for line in lines
     ]
 
@@ -519,11 +522,11 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     return input_lines, output_lines, lens, mask, idx
 
 
-def back_translation_minibatch(src, tgt, idx, batch_size, max_len, model, model_type):
+def back_translation_minibatch(src, tgt, config, idx, batch_size, max_len, model, model_type, use_src = True):
 
     # get minibatch of inputs, attributes, outputs in other style direction
-    input_content, input_aux, output = data.minibatch(
-        src, tgt, idx, batch_size, max_len, config['model']['model_type'], is_bt = True)
+    input_content, input_aux, output = minibatch(
+        src, tgt, idx, batch_size, max_len, config['model']['model_type'], use_src = use_src, is_bt = True)
 
     # decode dataset with greedy, beam search, or top k
     tokenizer = src['tokenizer']
@@ -531,9 +534,9 @@ def back_translation_minibatch(src, tgt, idx, batch_size, max_len, model, model_
     tgt_pred = evaluation.generate_sequences(
         tokenizer,
         model, 
+        config,
         data.get_start_id(tokenizer),
         data.get_stop_id(tokenizer),
-        max_len,
         input_content,
         input_aux,
         output
@@ -541,15 +544,31 @@ def back_translation_minibatch(src, tgt, idx, batch_size, max_len, model, model_
 
     # get minibatch of decoded inputs, attributes, outputs in original style direction
     # extract attributes from tgt_pred
-    # create src and tgt dictionary w/ correct key / value pairs
-    # set is_bt false
-    input_content, input_aux, output = data.minibatch(
-        src, tgt, idx, batch_size, max_len, config['model']['model_type'], is_bt = True)
+    join_path = 'post_attribute_vocab.pkl' if use_src else 'pre_attribute_vocab.pkl'
+    attr_path = os.path.join(config['data']['vocab_dir'], join_path)
+    attr = pickle.load(open(attr_path, "rb"))
+    _, content, _ = list(zip(
+        *[extract_attributes(line, attr, config['data']['noise'], config['data']['dropout_prob'],
+            config['data']['ngram_range'], config['data']['permutation']) for line in tgt_pred]
+    ))
 
-def minibatch(src, tgt, idx, batch_size, max_len, model_type, is_test=False, is_bt = False):
+    # create back translation dictionary w/ correct key / value pairs
+    dist_measurer = src['dist_measurer'] if use_src else tgt['dist_measurer']
+    bt_src = {
+        'data': [c + a for c, a in zip(content, src['attribute'])], 
+        'content': content, 
+        'attribute': src['attribute'], 
+        'tokenizer': tokenizer,
+        'dist_measurer': dist_measurer
+    }
+    
+    # set is_bt false, translate in same direction for evaluation
+    return minibatch(bt_src, tgt, idx, batch_size, max_len, config['model']['model_type'], use_src = use_src)
+
+def minibatch(src, tgt, idx, batch_size, max_len, model_type, use_src = True, is_test=False, is_bt = False):
 
     if not is_test:
-        use_src = random.random() < 0.5
+        #use_src = random.random() < 0.5
         in_dataset = src if use_src else tgt
         
         # flip attribute ids if generating backtranslation minibatch

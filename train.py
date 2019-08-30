@@ -18,6 +18,7 @@ import src.evaluation as evaluation
 from src.cuda import CUDA
 import src.data as data
 import src.models as models
+import random
 
 
 parser = argparse.ArgumentParser()
@@ -57,7 +58,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename='%s/train_log' % working_dir,
 )
-
 console = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console.setFormatter(formatter)
@@ -68,11 +68,12 @@ logger.addHandler(console)
 logger.addHandler(filelog)
 logger.setLevel(logging.INFO)
 
+# read data
 logging.info('Reading data ...')
-input_lines_src = [l for l in open(config['data']['src'], 'r')]
-input_lines_tgt = [l for l in open(config['data']['tgt'], 'r')]
-input_lines_src_test = [l for l in open(config['data']['src_test'], 'r')]
-input_lines_tgt_test = [l for l in open(config['data']['tgt_test'], 'r')]
+input_lines_src = [l.strip().split() for l in open(config['data']['src'], 'r')]
+input_lines_tgt = [l.strip().split()  for l in open(config['data']['tgt'], 'r')]
+input_lines_src_test = [l.strip().split()  for l in open(config['data']['src_test'], 'r')]
+input_lines_tgt_test = [l.strip().split()  for l in open(config['data']['tgt_test'], 'r')]
 
 src, tgt = data.read_nmt_data(
    src_lines=input_lines_src,
@@ -90,27 +91,17 @@ src_test, tgt_test = data.read_nmt_data(
 )
 logging.info('...done!')
 
+# grab important params from config
 batch_size = config['data']['batch_size']
 max_length = config['data']['max_len']
 src_vocab_size = tgt_vocab_size = len(src['tokenizer'])
-
-weight_mask = torch.ones(tgt_vocab_size)
 padding_id = data.get_padding_id(src['tokenizer'])
-weight_mask[padding_id] = 0
-loss_crit = config['training']['loss_criterion']
-if loss_crit == 'cross_entropy':
-    loss_criterion = nn.CrossEntropyLoss(weight=weight_mask)
-    if CUDA:
-        loss_criterion = loss_criterion.cuda()
-elif loss_crit != 'expected_bleu':
-    raise NotImplementedError("Loss criterion not supported for this task")
-
-if CUDA:
-    weight_mask = weight_mask.cuda()
-
+assert padding_id == src['tokenizer'].vocab_size + 1
 torch.manual_seed(config['training']['random_seed'])
 np.random.seed(config['training']['random_seed'])
+writer = SummaryWriter(working_dir)
 
+# define and load model
 model = models.FusedSeqModel(
    src_vocab_size=src_vocab_size,
    tgt_vocab_size=tgt_vocab_size,
@@ -126,9 +117,7 @@ model, start_epoch = models.attempt_load_model(
 if CUDA:
     model = model.cuda()
 
-writer = SummaryWriter(working_dir)
-
-
+# define learning rate and scheduler
 if config['training']['optimizer'] == 'adam':
     lr = config['training']['learning_rate']
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -150,6 +139,7 @@ elif scheduler_name == 'cyclic':
 else:
     raise NotImplementedError("Learning scheduler not recommended for this task")
 
+# main training loop
 epoch_loss = []
 start_since_last_report = time.time()
 words_since_last_report = 0
@@ -180,40 +170,22 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
         batch_idx = i / batch_size
 
-        input_content, input_aux, output = data.minibatch(
-            src, tgt, i, batch_size, max_length, config['model']['model_type'])
-        input_lines_src, _, srclens, srcmask, _ = input_content
-        input_ids_aux, _, auxlens, auxmask, _ = input_aux
-        input_lines_tgt, output_lines_tgt, tgtlens, _, _ = output
-        
-        decoder_logit, decoder_probs = model(
-            input_lines_src, input_lines_tgt, srcmask, srclens,
-            input_ids_aux, auxlens, auxmask)
-
-        # repeat above two steps w/ back translation minibatch
-        # calculate loss on two minibatches separately, weight losses w/ ratio
-
+        # calculate loss
         optimizer.zero_grad()
+        loss_crit = config['training']['loss_criterion']
+        train_loss, _ = evaluation.calculate_loss(src, tgt, i, batch_size, max_length, 
+            config['model']['model_type'], loss_crit=loss_crit, config['training']['bt_ratio'])
+        loss_item = train_loss.item() if loss_crit == 'cross_entropy' else -train_loss.item()
+        losses.append(loss_item)
+        losses_since_last_report.append(loss_item)
+        epoch_loss.append(loss_item)
+        train_loss.backward()
 
-        if loss_crit == 'cross_entropy':
-            loss = loss_criterion(
-                decoder_logit.contiguous().view(-1, tgt_vocab_size),
-                output_lines_tgt.view(-1)
-            )
-        else:
-            loss = bleu(decoder_probs, output_lines_tgt.view(-1), 
-                torch.LongTensor([max_length] * batch_size),
-                tgtlens, max_order=config['data']['ngram_range'], smooth=True)[0]
-
-        losses.append(loss.item())
-        losses_since_last_report.append(loss.item())
-        epoch_loss.append(loss.item())
-        loss.backward()
+        # write information to tensorboard
         norm = nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_norm'])
-
         writer.add_scalar('stats/grad_norm', norm, STEP)
-
         optimizer.step()
+
         if scheduler_name == 'cyclic':
             writer.add_scalar('stats/lr', scheduler.get_lr(), STEP)
 
@@ -236,6 +208,8 @@ for epoch in range(start_epoch, config['training']['epochs']):
     if args.overfit:
         continue
     logging.info('EPOCH %s COMPLETE. EVALUATING...' % epoch)
+
+    # evaluate on dev set, update scheduler
     start = time.time()
     model.eval()
     dev_loss, mean_entropy = evaluation.evaluate_lpp(
@@ -248,6 +222,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
             writer.add_scalar('stats/lr', param_group['lr'], epoch)
         scheduler.step(dev_loss)
 
+    # write predictions and ground truths to checkpoint dir
     if args.bleu and epoch >= config['training'].get('inference_start_epoch', 1):
         
         cur_metric, edit_distance, inputs, preds, golds, auxs = evaluation.inference_metrics(
