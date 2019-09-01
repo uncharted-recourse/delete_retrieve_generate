@@ -56,3 +56,26 @@ class LSTMEncoder(nn.Module):
             outputs, _ = pad_packed_sequence(outputs, batch_first=True)
 
         return outputs, (h_final, c_final)
+
+class TransformerEncoder(nn.Module):
+    """ simple wrapper for a transformer encoder """
+    def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4):
+        super(TransformerEncoder, self).__init__()
+
+        self.encoder_layer = nn.TransformerEncoderLayer(
+            emb_dim, 
+            n_head = n_head, 
+            dim_feedforward = dim_ff, 
+            dropout = dropout
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            self.encoder_layer, 
+            num_layers, 
+            norm = nn.LayerNorm(emb_dim)
+        )
+
+    def forward(self, src_embedding, srcmask):
+        return self.transformer_encoder.forward(
+            src_embedding, 
+            srcmask
+        )

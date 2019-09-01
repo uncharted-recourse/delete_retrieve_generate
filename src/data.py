@@ -13,7 +13,7 @@ from src import evaluation
 
 import logging
 from utils.log_func import get_log_func
-from pytorch_transformers import BertTokenizer, OpenAIGPTTokenizer, GPT2Tokenizer, XLNetTokenizer, TransfoXLTokenizer
+from pytorch_transformers import OpenAIGPTTokenizer, GPT2Tokenizer#, XLNetTokenizer, TransfoXLTokenizer
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from tqdm import tqdm
 
@@ -198,7 +198,7 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
         attribute_markers = []
         for marker in candidate_markers:
             if marker in content:
-                attribute_markers.append(marker.split())
+                attribute_markers.extend(marker.split())
                 content = content.replace(marker, "")
         content = content.split()
         
@@ -287,18 +287,18 @@ def get_tokenizer(encoder = 'gpt2',
     tokenizers = {
         'gpt': OpenAIGPTTokenizer, 
         'gpt2': GPT2Tokenizer, 
-        'xlnet': XLNetTokenizer,
-        'transformerxl': TransfoXLTokenizer
+        # 'xlnet': XLNetTokenizer,
+        # 'transformerxl': TransfoXLTokenizer
     }
     tokenizer_weights = {
         'gpt': 'openai-gpt', 
         'gpt2': 'gpt2', 
-        'xlnet': 'xlnet-base-cased',
-        'transformerxl': 'transfo-xl-wt103'
+        # 'xlnet': 'xlnet-base-cased',
+        # 'transformerxl': 'transfo-xl-wt103'
     }
 
     if encoder not in tokenizers.keys():
-        raise Exception("Tokenizer must be one of 'bert', 'gpt', 'gpt2', 'xlnet', 'transformerxl', or tensorflow subword vocab file")
+        raise Exception("Tokenizer must be one of 'gpt', 'gpt2'")#, 'xlnet', 'transformerxl'")
     else:    
         tokenizer = tokenizers[encoder].from_pretrained(
             tokenizer_weights[encoder], 
@@ -479,7 +479,7 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     lines = [line[:max_len] for line in lines[index:index + batch_size]]
 
     if dist_measurer is not None:
-        lines = sample_replace(lines, dist_measurer, sample_rate, index)
+        lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
 
     lines = [tokenizer.encode(tokenizer.bos_token + " ".join(line) + tokenizer.eos_token) for line in lines]
     lens = [len(line) - 1 for line in lines]

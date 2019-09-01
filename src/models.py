@@ -11,10 +11,10 @@ from torch.autograd import Variable
 
 import src.decoders as decoders
 import src.encoders as encoders
+import src.discriminators as discriminators
 
 from src.cuda import CUDA
 from src import data
-from pytorch_transformers import OpenAIGPTLMHeadModel, GPT2LMHeadModel, XLNetLMHeadModel, TransfoXLLMHeadModel
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -120,6 +120,14 @@ class SeqModel(nn.Module):
                 self.options['src_hidden_dim'],
                 self.options['tgt_hidden_dim'])
 
+        elif self.options['encoder'] == 'transformer':
+            # for now take default values of n_head
+            self.encoder = encoders.TransformerEncoder(
+                self.options['emb_dim'],
+                dim_feedforward=self.options['src_hidden_dim'],
+                dropout=self.options['dropout'],
+                num_layers=self.options['src_layers']
+            )
         else:
             raise NotImplementedError('unknown encoder type')
 
@@ -127,19 +135,30 @@ class SeqModel(nn.Module):
         
         if self.model_type == 'delete':
             self.attribute_embedding = nn.Embedding(
+                # TODO change num to num styles supported
                 num_embeddings=2, 
                 embedding_dim=self.options['emb_dim'])
             attr_size = self.options['emb_dim']
 
         elif self.model_type == 'delete_retrieve':
-            self.attribute_encoder = encoders.LSTMEncoder(
-                self.options['emb_dim'],
-                self.options['src_hidden_dim'],
-                self.options['src_layers'],
-                self.options['bidirectional'],
-                self.options['dropout'],
-                pack=False)
-            attr_size = self.options['src_hidden_dim']
+            if self.options['encoder'] == 'lstm':
+                self.attribute_encoder = encoders.LSTMEncoder(
+                    self.options['emb_dim'],
+                    self.options['src_hidden_dim'],
+                    self.options['src_layers'],
+                    self.options['bidirectional'],
+                    self.options['dropout'],
+                    pack=False)
+                attr_size = self.options['src_hidden_dim']
+            elif self.options['encoder'] == 'transformer':
+                # for now take default values of n_head
+                self.attribute_encoder = encoders.TransformerEncoder(
+                    self.options['emb_dim'],
+                    dim_feedforward=self.options['src_hidden_dim'],
+                    dropout=self.options['dropout'],
+                    num_layers=self.options['src_layers']
+                )
+                attr_size = self.options['src_hidden_dim']
 
         elif self.model_type == 'seq2seq':
             attr_size = 0
@@ -155,8 +174,17 @@ class SeqModel(nn.Module):
             self.options['tgt_hidden_dim'])
 
         # # # # # #  # # # # # #  # # # # # END NEW STUFF
-
-        self.decoder = decoders.StackedAttentionLSTM(config=config)
+        if self.options['decoder'] == 'lstm':
+            self.decoder = decoders.StackedAttentionLSTM(config=config)
+        elif self.options['decoder'] == 'transformer':
+            self.decoder = decoders.TransformerDecoder(
+                self.options['emb_dim'],
+                dim_feedforward=self.options['src_hidden_dim'],
+                dropout=self.options['dropout'],
+                num_layers=self.options['tgt_layers']
+            )
+        else:
+            raise NotImplementedError('unknown decoder type')
 
         # TODO: should we tie the weights of this output projection to input if embeddings are the same?
         self.output_projection = nn.Linear(
@@ -176,21 +204,26 @@ class SeqModel(nn.Module):
         self.c_bridge.bias.data.fill_(0)
         self.output_projection.bias.data.fill_(0)
 
-    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask):
+    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
         src_emb = self.src_embedding(input_src)
 
         srcmask = (1-srcmask).byte()
 
-        src_outputs, (src_h_t, src_c_t) = self.encoder(src_emb, srclens, srcmask)
+        if self.options['encoder'] == 'lstm':
+            src_outputs, (src_h_t, src_c_t) = self.encoder(src_emb, srclens, srcmask)
+            
+            if self.options['bidirectional']:
+                h_t = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
+                c_t = torch.cat((src_c_t[-1], src_c_t[-2]), 1)
+            else:
+                h_t = src_h_t[-1]
+                c_t = src_c_t[-1]
+            src_outputs = self.ctx_bridge(src_outputs)
 
-        if self.options['bidirectional']:
-            h_t = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
-            c_t = torch.cat((src_c_t[-1], src_c_t[-2]), 1)
-        else:
-            h_t = src_h_t[-1]
-            c_t = src_c_t[-1]
+        elif self.options['encoder'] == 'transformer':
+            h_t = self.encoder(src_emb, srcmask)
 
-        src_outputs = self.ctx_bridge(src_outputs)
+        #src_outputs = self.ctx_bridge(src_outputs)
 
 
         # # # #  # # # #  # #  # # # # # # #  # # seq2seq diff
@@ -200,36 +233,50 @@ class SeqModel(nn.Module):
         if self.model_type == 'delete':
             # just do h i guess?
             a_ht = self.attribute_embedding(input_attr)
-            c_t = torch.cat((c_t, a_ht), -1)
-            h_t = torch.cat((h_t, a_ht), -1)
+            if self.options['encoder'] == 'lstm':
+                c_t = torch.cat((c_t, a_ht), -1)
+                c_t = self.c_bridge(c_t)
 
         elif self.model_type == 'delete_retrieve':
             attr_emb = self.src_embedding(input_attr)
-            _, (a_ht, a_ct) = self.attribute_encoder(attr_emb, attrlens, attrmask)
-            if self.options['bidirectional']:
-                a_ht = torch.cat((a_ht[-1], a_ht[-2]), 1)
-                a_ct = torch.cat((a_ct[-1], a_ct[-2]), 1)
-            else:
-                a_ht = a_ht[-1]
-                a_ct = a_ct[-1]
 
-            h_t = torch.cat((h_t, a_ht), -1)
-            c_t = torch.cat((c_t, a_ct), -1)
-            
-        c_t = self.c_bridge(c_t)
+            if self.options['encoder'] == 'lstm':
+                _, (a_ht, a_ct) = self.attribute_encoder(attr_emb, attrlens, attrmask)
+                if self.options['bidirectional']:
+                    a_ht = torch.cat((a_ht[-1], a_ht[-2]), 1)
+                    a_ct = torch.cat((a_ct[-1], a_ct[-2]), 1)
+                else:
+                    a_ht = a_ht[-1]
+                    a_ct = a_ct[-1]
+                c_t = torch.cat((c_t, a_ct), -1)
+                c_t = self.c_bridge(c_t)
+
+            elif self.options['encoder'] == 'transformer':
+                a_ht = self.attribute_encoder(attr_emb, attrmask)
+
+        h_t = torch.cat((h_t, a_ht), -1)
         h_t = self.h_bridge(h_t)
 
         # # # #  # # # #  # #  # # # # # # #  # # end diff
         tgt_emb = self.tgt_embedding(input_tgt)
-        tgt_outputs, (_, _) = self.decoder(
-            tgt_emb,
-            (h_t, c_t),
-            src_outputs,
-            srcmask)
+        if self.options['decoder'] == 'lstm':
+            tgt_outputs, (_, _) = self.decoder(
+                tgt_emb,
+                (h_t, c_t),
+                src_outputs,
+                srcmask)
+        elif self.options['decoder'] == 'transformer':
+            tgt_outputs = self.decoder(
+                tgt_emb, 
+                h_t, 
+                tgtmask,
+                srcmask)
 
         tgt_outputs_reshape = tgt_outputs.contiguous().view(
             tgt_outputs.size()[0] * tgt_outputs.size()[1],
             tgt_outputs.size()[2])
+
+        # Should we tie these weights to decoder input embedding?
         decoder_logit = self.output_projection(tgt_outputs_reshape)
         decoder_logit = decoder_logit.view(
             tgt_outputs.size()[0],
@@ -262,37 +309,14 @@ class FusedSeqModel(SeqModel):
         """Initialize model."""
         super(FusedSeqModel, self).__init__(*args, **kwargs)
 
-        models = {
-            'gpt': OpenAIGPTLMHeadModel, 
-            'gpt2': GPT2LMHeadModel, 
-            'xlnet': XLNetLMHeadModel,
-            'transformerxl': TransfoXLLMHeadModel
-        }
-        model_weights = {
-            'gpt': 'openai-gpt', 
-            'gpt2': 'gpt2', 
-            'xlnet': 'xlnet-base-cased',
-            'transformerxl': 'transfo-xl-wt103'
-        }
-
-        model_name = self.config['data']['tokenizer']
-        if model_name not in models.keys():
-            raise Exception("Language model must be one of 'bert', 'gpt', 'gpt2', 'xlnet', 'transformerxl'")
-
-        # !! assume that language model and seq2seq are using same tokenization !!
-        self.language_model = models[model_name].from_pretrained(model_weights[model_name], 
-            cache_dir=self.config['data']['working_dir']
+        # initialize language model
+        self.language_model = discriminators.LanguageModel(
+            self.tgt_vocab_size,
+            join_method=join_method,
+            finetune=finetune,
+            model_name=config['data']['tokenizer'],
+            cache_dir=config['data']['lm_dir']
         )
-
-        # resize token embeddings if vocabulary has been augmented with special tokens
-        self.language_model.resize_token_embeddings(self.src_vocab_size)
-
-        # finetune if desired
-        if CUDA:
-            self.language_model = self.language_model.cuda()
-        if not finetune:
-            for param in self.language_model.parameters():
-                param.requires_grad = False
 
         # join language model and s2s model
         self.join_method = join_method
@@ -307,7 +331,7 @@ class FusedSeqModel(SeqModel):
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask):
 
         # generate predictions from language model
-        lm_logit = self.language_model(input_tgt)[0]
+        lm_logit = self.language_model.forward(input_tgt)
 
         # generate s2s logits
         s2s_logit, _ = super(FusedSeqModel, self).forward(input_src,

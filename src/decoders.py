@@ -124,4 +124,29 @@ class StackedAttentionLSTM(nn.Module):
 
         return input, (h_final, c_final)
 
+class TransformerDecoder(nn.Module):
+    """ simple wrapper for a transformer encoder """
+    def __init__(self, emb_dim, n_head = 8, dim_feedforward = 1024, dropout = 0.1, num_layers = 4):
+        super(TransformerDecoder, self).__init__()
+
+        self.encoder_layer = nn.TransformerDecoderLayer(
+            emb_dim, 
+            n_head, 
+            dim_feedforward = dim_feedforward, 
+            dropout = dropout
+        )
+        self.transformer_decoder = nn.TransformerDecoder(
+            self.encoder_layer, 
+            num_layers,
+            norm = nn.LayerNorm(emb_dim)
+        )
+
+    def forward(self, encoder_output, tgt_embedding, tgtmask, srcmask):
+        return self.transformer_decoder.forward(
+            tgt_embedding, 
+            encoder_output, 
+            tgtmask = tgtmask, 
+            memory_mask = srcmask
+        )
+
 

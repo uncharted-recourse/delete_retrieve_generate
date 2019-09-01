@@ -46,6 +46,8 @@ vocab_dir = os.path.join("checkpoints", config['data']['vocab_dir'])
 
 if not os.path.exists(working_dir):
     os.makedirs(working_dir)
+if not os.path.exists(vocab_dir):
+    os.makedirs(vocab_dir)
 
 config_path = os.path.join(working_dir, 'config.json')
 if not os.path.exists(config_path):
@@ -96,7 +98,6 @@ batch_size = config['data']['batch_size']
 max_length = config['data']['max_len']
 src_vocab_size = tgt_vocab_size = len(src['tokenizer'])
 padding_id = data.get_padding_id(src['tokenizer'])
-assert padding_id == src['tokenizer'].vocab_size
 torch.manual_seed(config['training']['random_seed'])
 np.random.seed(config['training']['random_seed'])
 writer = SummaryWriter(working_dir)

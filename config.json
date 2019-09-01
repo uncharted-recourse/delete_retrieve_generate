@@ -26,16 +26,19 @@
     "max_len": 50,
     "permutation": 0,
     "working_dir": "noise",
-    "vocab_dir": "noise_vocab"
+    "vocab_dir": "noise_vocab",
+    "lm_dir": "gpt2_model"
   },
     "model": {
         "model_type": "delete",
         "emb_dim": 128,
-        "attention": false,
         "encoder": "lstm",
+        "bidirectional": true,
+        "decoder": "lstm",
+        "attention": true,
+        "discriminator": true,
         "src_hidden_dim": 512,
         "src_layers": 1,
-        "bidirectional": true,
         "tgt_hidden_dim": 512,
         "tgt_layers": 1,
         "decode": "greedy",

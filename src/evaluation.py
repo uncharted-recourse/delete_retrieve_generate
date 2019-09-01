@@ -150,7 +150,7 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
 def decode_minibatch_greedy(max_len, start_id, model, src_input, srclens, srcmask,
         aux_input, auxlens, auxmask):
     """ argmax decoding """
-    # Initialize target with <s> for every sentence
+    # Initialize target with start_id for every sentence
     tgt_input = Variable(torch.LongTensor(
         [
             [start_id] for i in range(src_input.size(0))
@@ -222,21 +222,13 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
                 input_ids_aux)])
         log(f'beam search decoding took: {time.time() - start_time}', level='debug')
     elif config['model']['decode'] == 'top_k':
-        if config['model']['model_type'] == 'delete_retrieve':
-            tgt_pred = torch.stack([top_k_decode(
-                model, i, [i_l], i_m, a, [a_l], a_m,
-                start_id, stop_id,
-                config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
-                i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
-                input_ids_aux, auxlens, auxmask)])
-        elif config['model']['model_type'] == 'delete':
-            input_ids_aux = input_ids_aux.unsqueeze(1)
-            tgt_pred = torch.stack([top_k_decode(
-                model, i, [i_l], i_m, a, None, None,
-                start_id, stop_id,
-                config['data']['max_len'], config['model']['k'], config['model']['temperature']) for 
-                i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
-                input_ids_aux)])
+        start_time = time.time()
+        tgt_pred = decode_top_k(
+            config['data']['max_len'], start_id, 
+            model, content, content_length, content_mask,
+            attributes, attributes_len, attributes_mask, 
+            config['model']['k'], config['model']['temperature']
+        )
         log(f'top k decoding took: {time.time() - start_time}', level='debug')
     else:
         raise Exception('Decoding method must be one of greedy, beam_search, top_k')
@@ -415,21 +407,12 @@ def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True
         log(f'beam search decoding took: {time.time() - start_time}', level='debug')
     elif config['model']['decode'] == 'top_k':
         start_time = time.time()
-        if config['model']['model_type'] == 'delete_retrieve':
-            tgt_pred = torch.stack([top_k_decode(
-                model, i, [i_l], i_m, a, [a_l], a_m,
-                start_id, stop_id,
-                max_len, config['model']['k'], config['model']['temperature']) for 
-                i, i_l, i_m, a, a_l, a_m in zip(content, content_length, content_mask,
-                attributes, attributes_len, attributes_mask)])
-        elif config['model']['model_type'] == 'delete':
-            input_ids_aux = input_ids_aux.unsqueeze(1)
-            tgt_pred = torch.stack([top_k_decode(
-                model, i, [i_l], i_m, a, None, None,
-                start_id, stop_id,
-                max_len, config['model']['k'], config['model']['temperature']) for 
-                i, i_l, i_m, a in zip(content, content_length, content_mask,
-                attributes)])
+        tgt_pred = decode_top_k(
+            max_len, start_id, 
+            model, content, content_length, content_mask,
+            attributes, attributes_len, attributes_mask, 
+            config['model']['k'], config['model']['temperature']
+        )
         log(f'top k decoding took: {time.time() - start_time}', level='debug')
     log(f'time for predictions: {time.time() - start_time}', level='debug')
 
@@ -458,68 +441,57 @@ def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen,
         aux_input, auxmask, auxlen)
     return decoder_logit[0, tgt_input.size()[1] - 1, :]
 
-def top_k_decode(
+def decode_top_k(
     model: nn.Module,
-    input_src: List[int] = None,
-    srclen: int = None,
+    src_input: List[int] = None,
+    srclens: int = None,
     srcmask: List[int] = None,
-    input_aux: List[int] = None,
-    auxlen: int = None,
+    aux_input: List[int] = None,
+    auxlens: int = None,
     auxmask: List[int] = None,
     start_id: int = None,
-    stop_id: int = None,
-    max_seq_length: int = 50,
+    max_len: int = 50,
     k: int = 10,
-    temperature=1.0,
-    init_prefix=None,
-    num_return=1,
-    return_scores=False,
+    temperature=1.0
 ):
-    init_seq = torch.tensor(init_prefix) if init_prefix else torch.tensor([start_id])
-    output_seqs = []
-    for _ in range(num_return):
-        generated_seq = init_seq
-        total_score = 0
+
+    # Initialize target with start_id for every sentence
+    tgt_input = Variable(torch.LongTensor(
+        [
+            [start_id] for i in range(src_input.size(0))
+        ]
+    ))
+
+    if CUDA:
+        tgt_input = tgt_input.cuda()
+
+    for i in range(max_len):
+        # run input through the model
+        decoder_logits, _ = model(src_input, tgt_input, srcmask, srclens,
+            aux_input, auxmask, auxlens)
+        decoder_logits = decoder_logits.data.cpu().numpy()
+
+        # if k=1, do greedy sampling
+        if k == 1:
+            sampled_indices = decoder_logits.argmax(axis=-1)
         
-        # exit condition: either hit max length or find stop character
-        while (generated_seq[-1] != stop_id) and (generated_seq.size()[0] < max_seq_length):
-            next_token_scores = get_next_token_scores(
-                model, input_src, generated_seq, srcmask, srclen, 
-                input_aux, auxmask, auxlen
-            )
-            next_token_scores = next_token_scores.data.cpu().numpy()
-            
-            # if k=1, do greedy sampling
-            if k == 1:
-                sampled_index = np.argmax(next_token_scores)
-            
-            # if k > 1, do softmax sampling over the top-k
-            elif k:
-                # grab last k (largest scores)
-                top_ids = np.argsort(next_token_scores)[-k:]
-                top_scores = next_token_scores[top_ids]
-                ind = sample_softmax(top_scores, temperature=temperature)
-                sampled_index = top_ids[ind]
-            
-            # if k is falsey (eg None), do softmax sampling over full vocab
-            else:
-                sampled_index = sample_softmax(
-                    next_token_scores, temperature=temperature
-                )
-            total_score += next_token_scores[sampled_index]
-            generated_seq = torch.cat((generated_seq, sampled_index), dim=0)
-        output_seqs.append((total_score, generated_seq))
-    
-    # sort by score
-    output_seqs = sorted(output_seqs, reverse=True)
-    
-    # strip scores if not being returned
-    output_seqs = output_seqs if return_scores else [seq[1] for seq in output_seqs]
-    if num_return == 1:
-        return output_seqs[0]
-    else:
-        assert len(output_seqs) == num_return
-        return output_seqs
+        # if k > 1, do softmax sampling over the top-k
+        elif k:
+            # grab last k (largest scores)
+            top_ids = decoder_logits.argsort(axis = -1)[-k:]
+            top_scores = decoder_logits[:, top_ids]
+            inds = [sample_softmax(top, temperature=temperature) for top in top_scores]
+            sampled_indices = top_ids[:, inds]
+        
+        # if k is falsey (eg None), do softmax sampling over full vocab
+        else:
+            sampled_indices = [sample_softmax(logits, temperature=temperature) for logits in decoder_logits]
+        total_scores += 
+        next_preds = Variable(torch.from_numpy(sampled_indices[:, -1]))
+        if CUDA:
+            next_preds = next_preds.cuda()
+        tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
+    return tgt_input
 
 class Beam(object):
     def __init__(self, beam_width):
