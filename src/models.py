@@ -119,18 +119,19 @@ class SeqModel(nn.Module):
             self.ctx_bridge = nn.Linear(
                 self.options['src_hidden_dim'],
                 self.options['tgt_hidden_dim'])
-
         elif self.options['encoder'] == 'transformer':
             # for now take default values of n_head
             self.encoder = encoders.TransformerEncoder(
                 self.options['emb_dim'],
-                dim_feedforward=self.options['src_hidden_dim'],
+                dim_ff=self.options['src_hidden_dim'],
                 dropout=self.options['dropout'],
                 num_layers=self.options['src_layers']
             )
+            self.ctx_bridge = nn.Linear(
+                self.options['emb_dim'],
+                self.options['emb_dim'])
         else:
             raise NotImplementedError('unknown encoder type')
-
         # # # # # #  # # # # # #  # # # # #  NEW STUFF FROM STD SEQ2SEQ
         
         if self.model_type == 'delete':
@@ -154,7 +155,7 @@ class SeqModel(nn.Module):
                 # for now take default values of n_head
                 self.attribute_encoder = encoders.TransformerEncoder(
                     self.options['emb_dim'],
-                    dim_feedforward=self.options['src_hidden_dim'],
+                    dim_ff=self.options['src_hidden_dim'],
                     dropout=self.options['dropout'],
                     num_layers=self.options['src_layers']
                 )
@@ -179,7 +180,7 @@ class SeqModel(nn.Module):
         elif self.options['decoder'] == 'transformer':
             self.decoder = decoders.TransformerDecoder(
                 self.options['emb_dim'],
-                dim_feedforward=self.options['src_hidden_dim'],
+                dim_ff=self.options['src_hidden_dim'],
                 dropout=self.options['dropout'],
                 num_layers=self.options['tgt_layers']
             )
@@ -187,10 +188,14 @@ class SeqModel(nn.Module):
             raise NotImplementedError('unknown decoder type')
 
         # TODO: should we tie the weights of this output projection to input if embeddings are the same?
-        self.output_projection = nn.Linear(
-            self.options['tgt_hidden_dim'],
-            tgt_vocab_size)
-
+        if self.options['decoder'] == 'lstm':
+            self.output_projection = nn.Linear(
+                self.options['tgt_hidden_dim'],
+                tgt_vocab_size)
+        elif self.options['decoder'] == 'transformer':
+            self.output_projection = nn.Linear(
+                self.options['emb_dim'],
+                tgt_vocab_size)
         self.softmax = nn.Softmax(dim=-1)
 
         self.init_weights()
@@ -225,7 +230,6 @@ class SeqModel(nn.Module):
             src_outputs = self.ctx_bridge(src_outputs)
             h_t = None
             c_t = None
-
         # # # #  # # # #  # #  # # # # # # #  # # seq2seq diff
         # join attribute with h/c then bridge 'em
         # TODO -- put this stuff in a method, overlaps w/above
@@ -239,8 +243,12 @@ class SeqModel(nn.Module):
                 h_t = torch.cat((h_t, a_ht), -1)
                 h_t = self.h_bridge(h_t)
             elif self.options['encoder'] == 'transformer':
+                a_ht = torch.unsqueeze(a_ht, 1)
                 src_outputs = torch.cat((a_ht, src_outputs), 1)
-
+                a_mask = Variable(torch.LongTensor([[0] for i in range(input_src.size(0))])).byte()
+                if CUDA:
+                    a_mask = a_mask.cuda()
+                srcmask = torch.cat((a_mask, srcmask), dim = 1)
         elif self.model_type == 'delete_retrieve':
             attr_emb = self.src_embedding(input_attr)
 
@@ -264,6 +272,7 @@ class SeqModel(nn.Module):
 
         # # # #  # # # #  # #  # # # # # # #  # # end diff
         tgt_emb = self.tgt_embedding(input_tgt)
+        print(f'src size: {src_outputs.size()}')
         if self.options['decoder'] == 'lstm':
             tgt_outputs, (_, _) = self.decoder(
                 tgt_emb,
@@ -271,16 +280,17 @@ class SeqModel(nn.Module):
                 src_outputs,
                 srcmask)
         elif self.options['decoder'] == 'transformer':
+            tgtmask = (1-tgtmask).byte()
             tgt_outputs = self.decoder(
                 tgt_emb, 
                 src_outputs, 
                 tgtmask,
                 srcmask)
-
+        print(f'tgt output: {tgt_outputs.size()}')
         tgt_outputs_reshape = tgt_outputs.contiguous().view(
             tgt_outputs.size()[0] * tgt_outputs.size()[1],
             tgt_outputs.size()[2])
-
+        print(f'tgt output reshape: {tgt_outputs_reshape.size()}')
         # Should we tie these weights to decoder input embedding?
         decoder_logit = self.output_projection(tgt_outputs_reshape)
         decoder_logit = decoder_logit.view(

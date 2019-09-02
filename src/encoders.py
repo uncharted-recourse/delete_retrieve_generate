@@ -76,6 +76,6 @@ class TransformerEncoder(nn.Module):
 
     def forward(self, src_embedding, srcmask):
         return self.transformer_encoder.forward(
-            src_embedding, 
+            src_embedding.transpose(0,1), 
             src_key_padding_mask = srcmask
-        )
+        ).transpose(0,1)

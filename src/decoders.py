@@ -144,12 +144,14 @@ class TransformerDecoder(nn.Module):
             norm = nn.LayerNorm(emb_dim)
         )
 
-    def forward(self, encoder_output, tgt_embedding, tgtmask, srcmask):
+    def forward(self, tgt_embedding, encoder_output, tgtmask, srcmask):
+        print(encoder_output.transpose(0,1).size())
+        print(srcmask.size())
         return self.transformer_decoder.forward(
-            tgt_embedding, 
-            encoder_output, 
+            tgt_embedding.transpose(0,1), 
+            encoder_output.transpose(0,1), 
             tgt_key_padding_mask = tgtmask, 
             memory_key_padding_mask = srcmask
-        )
+        ).transpose(0,1)
 
 
