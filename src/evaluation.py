@@ -164,9 +164,9 @@ def decode_minibatch_greedy(max_len, start_id, model, src_input, srclens, srcmas
         # run input through the model
         decoder_logit, word_probs = model(src_input, tgt_input, srcmask, srclens,
             aux_input, auxmask, auxlens)
-        decoder_argmax = word_probs.data.cpu().numpy().argmax(axis=-1)
+        decoder_argmax = word_probs.data.cpu().numpy()[:,-1,:].argmax(axis=-1)
         # select the predicted "next" tokens, attach to target-side inputs
-        next_preds = Variable(torch.from_numpy(decoder_argmax[:, -1]))
+        next_preds = Variable(torch.from_numpy(decoder_argmax))
         if CUDA:
             next_preds = next_preds.cuda()
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
@@ -225,8 +225,8 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
         start_time = time.time()
         tgt_pred = decode_top_k(
             config['data']['max_len'], start_id, 
-            model, content, content_length, content_mask,
-            attributes, attributes_len, attributes_mask, 
+            model, input_lines_src, srclens, srcmask,
+            input_ids_aux, auxlens, auxmask, 
             config['model']['k'], config['model']['temperature']
         )
         log(f'top k decoding took: {time.time() - start_time}', level='debug')
@@ -424,7 +424,7 @@ def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True
 def sample_softmax(logits, temperature=1.0, num_samples=1):
     exps = np.exp((logits - np.max(logits)) / temperature)
     probs = exps / np.sum(exps)
-    return np.random.multinomial(num_samples, probs, 1)
+    return np.random.choice(logits.shape[0], p = probs)
 
 def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen, 
                         aux_input, auxmask, auxlen):
@@ -442,16 +442,16 @@ def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen,
     return decoder_logit[0, tgt_input.size()[1] - 1, :]
 
 def decode_top_k(
-    model: nn.Module,
-    src_input: List[int] = None,
-    srclens: int = None,
-    srcmask: List[int] = None,
-    aux_input: List[int] = None,
-    auxlens: int = None,
-    auxmask: List[int] = None,
-    start_id: int = None,
-    max_len: int = 50,
-    k: int = 10,
+    max_len,
+    start_id,
+    model,
+    src_input,
+    srclens,
+    srcmask,
+    aux_input,
+    auxlens,
+    auxmask,
+    k = 10,
     temperature=1.0
 ):
 
@@ -469,25 +469,20 @@ def decode_top_k(
         # run input through the model
         decoder_logits, _ = model(src_input, tgt_input, srcmask, srclens,
             aux_input, auxmask, auxlens)
-        decoder_logits = decoder_logits.data.cpu().numpy()
+        decoder_logits = decoder_logits.data.cpu().numpy()[:,-1,:]
 
         # if k=1, do greedy sampling
         if k == 1:
+            s = time.time()
             sampled_indices = decoder_logits.argmax(axis=-1)
-        
         # if k > 1, do softmax sampling over the top-k
         elif k:
             # grab last k (largest scores)
-            top_ids = decoder_logits.argsort(axis = -1)[-k:]
-            top_scores = decoder_logits[:, top_ids]
+            top_ids = decoder_logits.argsort(axis = -1)[:,-k:]
+            top_scores = [x[idx] for x, idx in zip(decoder_logits, top_ids)]
             inds = [sample_softmax(top, temperature=temperature) for top in top_scores]
-            sampled_indices = top_ids[:, inds]
-        
-        # if k is falsey (eg None), do softmax sampling over full vocab
-        else:
-            sampled_indices = [sample_softmax(logits, temperature=temperature) for logits in decoder_logits]
-        total_scores += 
-        next_preds = Variable(torch.from_numpy(sampled_indices[:, -1]))
+            sampled_indices = np.array([x[idx] for x,idx in zip(top_ids, inds)])
+        next_preds = Variable(torch.from_numpy(sampled_indices))
         if CUDA:
             next_preds = next_preds.cuda()
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
