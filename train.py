@@ -43,11 +43,14 @@ config = json.load(open(args.config, 'r'))
 # save all checkpoint folders to checkpoint dir
 working_dir = os.path.join("checkpoints", config['data']['working_dir'])
 vocab_dir = os.path.join("checkpoints", config['data']['vocab_dir'])
+lm_dir = os.path.join("checkpoints", config['data']['lm_dir'])
 
 if not os.path.exists(working_dir):
     os.makedirs(working_dir)
 if not os.path.exists(vocab_dir):
     os.makedirs(vocab_dir)
+if not os.path.exists(lm_dir):
+    os.makedirs(lm_dir)
 
 config_path = os.path.join(working_dir, 'config.json')
 if not os.path.exists(config_path):
