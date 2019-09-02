@@ -116,30 +116,31 @@ class SeqModel(nn.Module):
                 self.options['src_layers'],
                 self.options['bidirectional'],
                 self.options['dropout'])
-            self.ctx_bridge = nn.Linear(
-                self.options['src_hidden_dim'],
-                self.options['tgt_hidden_dim'])
         elif self.options['encoder'] == 'transformer':
             # for now take default values of n_head
             self.encoder = encoders.TransformerEncoder(
-                self.options['emb_dim'],
-                dim_ff=self.options['src_hidden_dim'],
+                self.options['src_hidden_dim'],
+                #dim_ff=self.options['src_hidden_dim'],
                 dropout=self.options['dropout'],
                 num_layers=self.options['src_layers']
             )
-            self.ctx_bridge = nn.Linear(
-                self.options['emb_dim'],
-                self.options['emb_dim'])
+        self.ctx_bridge = nn.Linear(
+            self.options['src_hidden_dim'],
+            self.options['tgt_hidden_dim'])
         else:
             raise NotImplementedError('unknown encoder type')
         # # # # # #  # # # # # #  # # # # #  NEW STUFF FROM STD SEQ2SEQ
         
         if self.model_type == 'delete':
+            if self.options['encoder'] == 'lstm':
+                emb_dim = self.options['emb_dim']
+            elif self.options['encoder'] == 'transformer':
+                emb_dim = self.options['src_hidden_dim']
             self.attribute_embedding = nn.Embedding(
                 # TODO change num to num styles supported
                 num_embeddings=2, 
-                embedding_dim=self.options['emb_dim'])
-            attr_size = self.options['emb_dim']
+                embedding_dim=emb_dim)
+            attr_size = emb_dim
 
         elif self.model_type == 'delete_retrieve':
             if self.options['encoder'] == 'lstm':
@@ -179,8 +180,8 @@ class SeqModel(nn.Module):
             self.decoder = decoders.StackedAttentionLSTM(config=config)
         elif self.options['decoder'] == 'transformer':
             self.decoder = decoders.TransformerDecoder(
-                self.options['emb_dim'],
-                dim_ff=self.options['src_hidden_dim'],
+                self.options['src_hidden_dim'],
+                #dim_ff=self.options['src_hidden_dim'],
                 dropout=self.options['dropout'],
                 num_layers=self.options['tgt_layers']
             )
@@ -188,14 +189,9 @@ class SeqModel(nn.Module):
             raise NotImplementedError('unknown decoder type')
 
         # TODO: should we tie the weights of this output projection to input if embeddings are the same?
-        if self.options['decoder'] == 'lstm':
-            self.output_projection = nn.Linear(
-                self.options['tgt_hidden_dim'],
-                tgt_vocab_size)
-        elif self.options['decoder'] == 'transformer':
-            self.output_projection = nn.Linear(
-                self.options['emb_dim'],
-                tgt_vocab_size)
+        self.output_projection = nn.Linear(
+            self.options['tgt_hidden_dim'],
+            tgt_vocab_size)
         self.softmax = nn.Softmax(dim=-1)
 
         self.init_weights()
