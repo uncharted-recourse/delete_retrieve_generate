@@ -487,7 +487,11 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     if dist_measurer is not None:
         lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
 
-    lines = [tokenizer.encode(tokenizer.bos_token + " ".join(line) + tokenizer.eos_token) for line in lines]
+    lines = [
+        [get_start_id(tokenizer)] + 
+        tokenizer.encode(" ".join(line))[:max_len] + 
+        [get_stop_id(tokenizer)] for line in lines]
+
     lens = [len(line) - 1 for line in lines]
     max_len = max(lens)
     if max_len >= 50:
