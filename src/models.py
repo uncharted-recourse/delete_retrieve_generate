@@ -204,7 +204,7 @@ class SeqModel(nn.Module):
         self.c_bridge.bias.data.fill_(0)
         self.output_projection.bias.data.fill_(0)
 
-    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
+    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask): #tgtmask
         src_emb = self.src_embedding(input_src)
 
         srcmask = (1-srcmask).byte()
@@ -269,7 +269,7 @@ class SeqModel(nn.Module):
             tgt_outputs = self.decoder(
                 tgt_emb, 
                 h_t, 
-                tgtmask,
+                #tgtmask,
                 srcmask)
 
         tgt_outputs_reshape = tgt_outputs.contiguous().view(
@@ -314,8 +314,8 @@ class FusedSeqModel(SeqModel):
             self.tgt_vocab_size,
             join_method=join_method,
             finetune=finetune,
-            model_name=config['data']['tokenizer'],
-            cache_dir=config['data']['lm_dir']
+            model_name=self.config['data']['tokenizer'],
+            cache_dir=self.config['data']['lm_dir']
         )
 
         # join language model and s2s model
@@ -328,7 +328,7 @@ class FusedSeqModel(SeqModel):
         else:
             raise Exception("join method must be 'gate' or 'add'")
 
-    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask):
+    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask): #tgtmask
 
         # generate predictions from language model
         lm_logit = self.language_model.forward(input_tgt)
@@ -340,7 +340,8 @@ class FusedSeqModel(SeqModel):
             srclens,
             input_attr,
             attrlens,
-            attrmask)
+            attrmask,
+        )
 
         # add or multiply projected logits
         if self.join_method == "add":
