@@ -536,7 +536,7 @@ def beam_search_decode(
         
     """
 
-    prev_beams = Beam(beam_width)
+    prev_beam = Beam(beam_width)
     prev_beam.add(1.0, False, Variable(torch.LongTensor([[start_id]])))
 
     while True:
