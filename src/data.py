@@ -553,7 +553,8 @@ def back_translation_minibatch(src, tgt, config, idx, batch_size, max_len, model
         attr = None
     else:
         join_path = 'post_attribute_vocab.pkl' if use_src else 'pre_attribute_vocab.pkl'
-        attr_path = os.path.join(config['data']['vocab_dir'], join_path)
+        attr_path = os.path.join('checkpoints', config['data']['vocab_dir'])
+        attr_path = os.path.join(attr_path, join_path)
         attr = pickle.load(open(attr_path, "rb"))
     _, content, _ = list(zip(
         *[extract_attributes(line.split(), attr, config['data']['noise'], config['data']['dropout_prob'],

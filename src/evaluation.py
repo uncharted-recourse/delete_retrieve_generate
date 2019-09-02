@@ -13,6 +13,7 @@ from src.cuda import CUDA
 from src.callbacks import mean_masked_entropy
 import random
 import time
+from modules.expectedMultiBleu import bleu as expected_bleu
 
 import os
 import logging
@@ -107,9 +108,9 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
         )
     else:
         # calculate lb expected bleu loss with max_order ngrams of 4 independent of ngram_range in config
-        loss = bleu(decoder_probs, output_lines_tgt.cpu(), 
+        loss = expected_bleu(decoder_probs, output_lines_tgt.cpu(), 
             torch.LongTensor([max_length] * batch_size),
-            tgtlens , smooth=True)[0]
+            tgtlens, smooth=True)[0]
 
     # mean entropy
     mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
@@ -133,7 +134,7 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
                 bt_output_lines_tgt.view(-1)
             )
         else:
-            bt_loss = bleu(bt_decoder_probs, bt_output_lines_tgt.cpu(), 
+            bt_loss = expected_bleu(bt_decoder_probs, bt_output_lines_tgt.cpu(), 
                 torch.LongTensor([max_length] * batch_size),
                 bt_tgtlens, smooth=True)[0]
 
@@ -486,7 +487,6 @@ def decode_top_k(
         # if k is falsey (eg None), do softmax sampling over full vocab
         else:
             sampled_indices = [sample_softmax(logits, temperature=temperature) for logits in decoder_logits]
-        total_scores += 
         next_preds = Variable(torch.from_numpy(sampled_indices[:, -1]))
         if CUDA:
             next_preds = next_preds.cuda()
