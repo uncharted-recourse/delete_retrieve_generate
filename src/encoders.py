@@ -64,7 +64,7 @@ class TransformerEncoder(nn.Module):
 
         self.encoder_layer = nn.TransformerEncoderLayer(
             emb_dim, 
-            n_head = n_head, 
+            n_head, 
             dim_feedforward = dim_ff, 
             dropout = dropout
         )
@@ -77,5 +77,5 @@ class TransformerEncoder(nn.Module):
     def forward(self, src_embedding, srcmask):
         return self.transformer_encoder.forward(
             src_embedding, 
-            srcmask
+            src_key_padding_mask = srcmask
         )

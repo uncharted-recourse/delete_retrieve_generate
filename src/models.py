@@ -221,10 +221,10 @@ class SeqModel(nn.Module):
             src_outputs = self.ctx_bridge(src_outputs)
 
         elif self.options['encoder'] == 'transformer':
-            h_t = self.encoder(src_emb, srcmask)
-
-        #src_outputs = self.ctx_bridge(src_outputs)
-
+            src_outputs = self.encoder(src_emb, srcmask)
+            src_outputs = self.ctx_bridge(src_outputs)
+            h_t = None
+            c_t = None
 
         # # # #  # # # #  # #  # # # # # # #  # # seq2seq diff
         # join attribute with h/c then bridge 'em
@@ -236,6 +236,10 @@ class SeqModel(nn.Module):
             if self.options['encoder'] == 'lstm':
                 c_t = torch.cat((c_t, a_ht), -1)
                 c_t = self.c_bridge(c_t)
+                h_t = torch.cat((h_t, a_ht), -1)
+                h_t = self.h_bridge(h_t)
+            elif self.options['encoder'] == 'transformer':
+                src_outputs = torch.cat((a_ht, src_outputs), 1)
 
         elif self.model_type == 'delete_retrieve':
             attr_emb = self.src_embedding(input_attr)
@@ -250,12 +254,13 @@ class SeqModel(nn.Module):
                     a_ct = a_ct[-1]
                 c_t = torch.cat((c_t, a_ct), -1)
                 c_t = self.c_bridge(c_t)
+                h_t = torch.cat((h_t, a_ht), -1)
+                h_t = self.h_bridge(h_t)
 
             elif self.options['encoder'] == 'transformer':
                 a_ht = self.attribute_encoder(attr_emb, attrmask)
+                src_outputs = torch.cat((a_ht, src_outputs), -1)
 
-        h_t = torch.cat((h_t, a_ht), -1)
-        h_t = self.h_bridge(h_t)
 
         # # # #  # # # #  # #  # # # # # # #  # # end diff
         tgt_emb = self.tgt_embedding(input_tgt)
@@ -268,7 +273,7 @@ class SeqModel(nn.Module):
         elif self.options['decoder'] == 'transformer':
             tgt_outputs = self.decoder(
                 tgt_emb, 
-                h_t, 
+                src_outputs, 
                 tgtmask,
                 srcmask)
 
@@ -328,7 +333,7 @@ class FusedSeqModel(SeqModel):
         else:
             raise Exception("join method must be 'gate' or 'add'")
 
-    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask): #tgtmask
+    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
 
         # generate predictions from language model
         lm_logit = self.language_model.forward(input_tgt)
@@ -341,6 +346,7 @@ class FusedSeqModel(SeqModel):
             input_attr,
             attrlens,
             attrmask,
+            tgtmask
         )
 
         # add or multiply projected logits

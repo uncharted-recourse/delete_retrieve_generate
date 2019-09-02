@@ -499,7 +499,7 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     ]
 
     mask = [
-        ([1] * l) + ([0] * (max_len - l))
+        ([True] * l) + ([False] * (max_len - l))
         for l in lens
     ]
 

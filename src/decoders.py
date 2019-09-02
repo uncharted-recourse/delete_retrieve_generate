@@ -70,7 +70,10 @@ class AttentionalLSTM(nn.Module):
         output = []
         timesteps = range(input.size(0))
         for i in timesteps:
-            hy, cy = self.cell(input[i], hidden)
+            if hidden[0] == None:
+                hy, cy = self.cell(input[i])
+            else:
+                hy, cy = self.cell(input[i], hidden)
             if self.use_attention:
                 _, h_tilde, alpha = self.attention_layer(hy, ctx, srcmask)
                 hidden = h_tilde, cy
@@ -126,17 +129,17 @@ class StackedAttentionLSTM(nn.Module):
 
 class TransformerDecoder(nn.Module):
     """ simple wrapper for a transformer encoder """
-    def __init__(self, emb_dim, n_head = 8, dim_feedforward = 1024, dropout = 0.1, num_layers = 4):
+    def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4):
         super(TransformerDecoder, self).__init__()
 
-        self.encoder_layer = nn.TransformerDecoderLayer(
+        self.decoder_layer = nn.TransformerDecoderLayer(
             emb_dim, 
             n_head, 
-            dim_feedforward = dim_feedforward, 
+            dim_feedforward = dim_ff, 
             dropout = dropout
         )
         self.transformer_decoder = nn.TransformerDecoder(
-            self.encoder_layer, 
+            self.decoder_layer, 
             num_layers,
             norm = nn.LayerNorm(emb_dim)
         )
@@ -145,8 +148,8 @@ class TransformerDecoder(nn.Module):
         return self.transformer_decoder.forward(
             tgt_embedding, 
             encoder_output, 
-            tgtmask = tgtmask, 
-            memory_mask = srcmask
+            tgt_key_padding_mask = tgtmask, 
+            memory_key_padding_mask = srcmask
         )
 
 
