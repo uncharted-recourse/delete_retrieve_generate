@@ -79,11 +79,11 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
         src, tgt, i, batch_size, max_length, model_type, use_src=use_src)
     input_lines_src, _, srclens, srcmask, _ = input_content
     input_ids_aux, _, auxlens, auxmask, _ = input_aux
-    input_lines_tgt, output_lines_tgt, tgtlens, _, _ = output
+    input_lines_tgt, output_lines_tgt, tgtlens, tgtmask, _ = output
     
     decoder_logit, decoder_probs = model(
         input_lines_src, input_lines_tgt, srcmask, srclens,
-        input_ids_aux, auxlens, auxmask)
+        input_ids_aux, auxlens, auxmask, tgtmask)
     
     # calculate loss on two minibatches separately, weight losses w/ ratio
     weight_mask = torch.ones(len(src['tokenizer']))
@@ -121,11 +121,11 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
             src, tgt, config, i, batch_size, max_length, model,  model_type, use_src=use_src)
         bt_input_lines_src, _, bt_srclens, bt_srcmask, _ = bt_input_content
         bt_input_ids_aux, _, bt_auxlens, bt_auxmask, _ = bt_input_aux
-        bt_input_lines_tgt, bt_output_lines_tgt, bt_tgtlens, _, _ = bt_output
+        bt_input_lines_tgt, bt_output_lines_tgt, bt_tgtlens, bt_tgtmask, _ = bt_output
         
         bt_decoder_logit, bt_decoder_probs = model(
             bt_input_lines_src, bt_input_lines_tgt, bt_srcmask, bt_srclens,
-            bt_input_ids_aux, bt_auxlens, bt_auxmask)
+            bt_input_ids_aux, bt_auxlens, bt_auxmask, bt_tgtmask)
         
         # calculate loss
         if loss_crit == 'cross_entropy':
@@ -148,7 +148,7 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
     # return combined loss and combined mean entropy
     return loss, mean_entropy
 
-def decode_minibatch_greedy(max_len, start_id, model, src_input, srclens, srcmask,
+def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclens, srcmask,
         aux_input, auxlens, auxmask):
     """ argmax decoding """
     # Initialize target with start_id for every sentence
@@ -158,19 +158,30 @@ def decode_minibatch_greedy(max_len, start_id, model, src_input, srclens, srcmas
         ]
     ))
 
+    # initialize target mask for Transformer decoder
+    tgt_mask = Variable(torch.LongTensor(
+        [
+            [1] for i in range(src_input.size(0))
+        ]
+    ))
+
     if CUDA:
         tgt_input = tgt_input.cuda()
 
     for i in range(max_len):
         # run input through the model
         decoder_logit, word_probs = model(src_input, tgt_input, srcmask, srclens,
-            aux_input, auxmask, auxlens)
+            aux_input, auxmask, auxlens, tgt_mask)
         decoder_argmax = word_probs.data.cpu().numpy()[:,-1,:].argmax(axis=-1)
         # select the predicted "next" tokens, attach to target-side inputs
         next_preds = Variable(torch.from_numpy(decoder_argmax))
+        next_mask = [[0]] if decoder_argmax == stop_id else [[1]]
+        next_mask = Variable(torch.from_numpy(np.array(next_mask)))
         if CUDA:
             next_preds = next_preds.cuda()
+            next_mask = next_mask.cuda()
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
+        tgt_mask = torch.cat((tgt_mask, next_mask.unsqueeze(1)), dim=1)
 
     return tgt_input
 

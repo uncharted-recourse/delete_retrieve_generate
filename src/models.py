@@ -204,7 +204,7 @@ class SeqModel(nn.Module):
         self.c_bridge.bias.data.fill_(0)
         self.output_projection.bias.data.fill_(0)
 
-    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask): #tgtmask
+    def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
         src_emb = self.src_embedding(input_src)
 
         srcmask = (1-srcmask).byte()
@@ -269,7 +269,7 @@ class SeqModel(nn.Module):
             tgt_outputs = self.decoder(
                 tgt_emb, 
                 h_t, 
-                #tgtmask,
+                tgtmask,
                 srcmask)
 
         tgt_outputs_reshape = tgt_outputs.contiguous().view(
