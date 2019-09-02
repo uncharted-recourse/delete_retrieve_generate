@@ -208,17 +208,17 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
         start_time = time.time()
         if config['model']['model_type'] == 'delete_retrieve':
             tgt_pred = torch.stack([beam_search_decode(
-                model, i, [i_l], i_m, a, [a_l], a_m,
-                start_id, stop_id,
-                config['data']['max_len'], config['model']['beam_width']) for 
+                config['data']['max_len'], start_id, stop_id, model, 
+                i, [i_l], i_m, a, [a_l], a_m,
+                data.get_padding_id(tokenizer), config['model']['beam_width']) for 
                 i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
                 input_ids_aux, auxlens, auxmask)])
         elif config['model']['model_type'] == 'delete':
             input_ids_aux = input_ids_aux.unsqueeze(1)
             tgt_pred = torch.stack([beam_search_decode(
-                model, i, [i_l], i_m, a, None, None,
-                start_id, stop_id,
-                config['data']['max_len'], config['model']['beam_width']) for 
+                config['data']['max_len'], start_id, stop_id, model, 
+                i, [i_l], i_m, a, None, None,
+                data.get_padding_id(tokenizer), config['model']['beam_width']) for 
                 i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
                 input_ids_aux)])
         log(f'beam search decoding took: {time.time() - start_time}', level='debug')
@@ -392,19 +392,19 @@ def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True
         start_time = time.time()
         if config['model']['model_type'] == 'delete_retrieve':
             tgt_pred = torch.stack([beam_search_decode(
-                model, i, [i_l], i_m, a, [a_l], a_m,
-                start_id, stop_id,
-                max_len, config['model']['beam_width']) for 
-                i, i_l, i_m, a, a_l, a_m in zip(content, content_length, content_mask,
-                attributes, attributes_len, attributes_mask)])
+                config['data']['max_len'], start_id, stop_id, model, 
+                i, [i_l], i_m, a, [a_l], a_m,
+                data.get_padding_id(tokenizer), config['model']['beam_width']) for 
+                i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
+                input_ids_aux, auxlens, auxmask)])
         elif config['model']['model_type'] == 'delete':
             input_ids_aux = input_ids_aux.unsqueeze(1)
             tgt_pred = torch.stack([beam_search_decode(
-                model, i, [i_l], i_m, a, None, None,
-                start_id, stop_id,
-                max_len, config['model']['beam_width']) for 
-                i, i_l, i_m, a in zip(content, content_length, content_mask,
-                attributes)])
+                config['data']['max_len'], start_id, stop_id, model, 
+                i, [i_l], i_m, a, None, None,
+                data.get_padding_id(tokenizer), config['model']['beam_width']) for 
+                i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
+                input_ids_aux)])
         log(f'beam search decoding took: {time.time() - start_time}', level='debug')
     elif config['model']['decode'] == 'top_k':
         start_time = time.time()
@@ -510,6 +510,7 @@ class Beam(object):
 def beam_search_decode(
     max_len,
     start_id,
+    stop_id,
     model,
     src_input,
     srclens,
