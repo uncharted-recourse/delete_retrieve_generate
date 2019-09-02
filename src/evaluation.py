@@ -535,7 +535,7 @@ def beam_search_decode(
         [(float, list[int])] -- sorted list of (score, sequence) pairs
         
     """
-
+    s = time.time()
     prev_beam = Beam(beam_width)
     prev_beam.add(1.0, False, Variable(torch.LongTensor([[start_id]])))
 
@@ -547,12 +547,14 @@ def beam_search_decode(
                 curr_beam.add(prefix_score, True, prefix)
             else:
                 # run input through the model
-                decoder_logits = get_next_token_scores(src_input, prefix, srcmask, srclens,
+                decoder_logits = get_next_token_scores(model, src_input, prefix, srcmask, srclens,
                     aux_input, auxmask, auxlens)
                 for next_id, next_score in enumerate(decoder_logits):
                     score = prefix_score + next_score
-                    next_pred = Variable(torch.from_numpy([[next_id]]))
-                    new_prefix = torch.cat((prefix, next_preds.unsqueeze(1)), dim=1)
+                    next_pred = Variable(torch.from_numpy(np.array([[next_id]])))
+                    print(prefix)
+                    new_prefix = torch.cat((prefix, next_pred), dim=1)
+                    print(new_prefix)
                     now_complete = next_id == stop_id or new_prefix.size()[1] >= max_len
                     curr_beam.add(score, now_complete, new_prefix)
         
@@ -561,16 +563,16 @@ def beam_search_decode(
                 curr_beam = sorted(curr_beam, reverse=True)[:num_return]
 
                 # pad beams that completed early 
-                lens = [prefix.size()[1] for _, _, prefix in curr_beam] 
-                max_len = max(lens)
-                padding = [Variable(torch.from_numpy([[padding_id] * (max_len - l)])) for l in lens]
-                padded = [(score, torch.cat((prefix, pad), dim=1)) for (score, _, prefix), pad in zip(curr_beam, padding)]
+                #lens = [prefix.size()[1] for _, _, prefix in curr_beam] 
+                #max_len = max(lens)
+                #padding = [Variable(torch.from_numpy(np.array([[padding_id] * (max_len - l)]))) for l in lens]
+                #padded = [(score, torch.cat((prefix, pad), dim=1)) for (score, _, prefix), pad in zip(curr_beam, padding)]
                 
                 if return_scores:
-                    generated_seqs = [(score, prefix) for score, prefix in padded]
+                    generated_seqs = [(score, prefix) for score, _, prefix in curr_beam]
                 else:
-                    generated_seqs = [prefix for score, prefix in padded]
-                
+                    generated_seqs = [prefix for score, _, prefix in curr_beam]
+                print(f'One beam decoding took {time.time() - s} seconds') 
                 if num_return == 1:
                     return generated_seqs[0]
                 else:
