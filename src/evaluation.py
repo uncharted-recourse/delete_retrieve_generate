@@ -509,25 +509,24 @@ class Beam(object):
         return iter(self.heap)
 
 def beam_search_decode(
-    model: nn.Module,
-    input_src: List[int] = None,
-    srclen: int = None,
-    srcmask: List[int] = None,
-    input_aux: List[int] = None,
-    auxlen: int = None,
-    auxmask: List[int] = None,
-    start_id: int = None,
-    stop_id: int = None,
-    max_seq_length: int = 50,
-    beam_width: int = 10,
-    init_prefix=None,
-    num_return = 1,
-    return_scores = False
+    max_len,
+    start_id,
+    model,
+    src_input,
+    srclens,
+    srcmask,
+    aux_input,
+    auxlens,
+    auxmask,
+    padding_id,
+    beam_width=10,
+    num_return=1,
+    return_scores=False
 ):
     """ Beam search decoding method 
     
     Arguments:
-        input_seq {List(int)} -- [Input sequence of integers]
+        src_input {List(int)} -- [Input sequence of integers]
     
     Keyword Arguments:
         beam_width {int} -- [Number of beams/sequences to use in search (higher can get better responses, but takes longer)] (default: {10})
@@ -536,47 +535,48 @@ def beam_search_decode(
         [(float, list[int])] -- sorted list of (score, sequence) pairs
         
     """
-    num_return = num_return or beam_width
-    prev_beam = Beam(beam_width)
-    
-    if init_prefix:
-        prev_beam.add(1.0, False, torch.LongTensor(init_prefix))
-    else:
-        prev_beam.add(1.0, False, torch.LongTensor([start_id]))
+
+    prev_beams = Beam(beam_width)
+    prev_beam.add(1.0, False, Variable(torch.LongTensor([[start_id]])))
+
     while True:
         curr_beam = Beam(beam_width)
-        
         # Add complete sentences to the current beam, add more words to the rest
         for (prefix_score, complete, prefix) in prev_beam:
             if complete:
                 curr_beam.add(prefix_score, True, prefix)
             else:
-                # Get probability of each possible next word for the incomplete prefix.
-                next_token_scores  = get_next_token_scores(
-                    model, input_src, prefix, srcmask, srclen, 
-                    input_aux, auxmask, auxlen
-                )
-                for next_id, next_score in enumerate(next_token_scores):
+                # run input through the model
+                decoder_logits, _ = model(src_input, prefix, srcmask, srclens,
+                    aux_input, auxmask, auxlens)
+                decoder_logits = decoder_logits.data.cpu().numpy()[:,-1,:]
+                for next_id, next_score in enumerate(decoder_logits):
                     score = prefix_score + next_score
-                    new_prefix = torch.cat((prefix, torch.LongTensor([next_id])), dim=0)
-                    now_complete = next_id == stop_id or new_prefix.size()[0] >= max_seq_length
+                    next_pred = Variable(torch.from_numpy([[next_id]]))
+                    new_prefix = torch.cat((prefix, next_preds.unsqueeze(1)), dim=1)
+                    now_complete = next_id == stop_id or new_prefix.size()[1] >= max_len
                     curr_beam.add(score, now_complete, new_prefix)
         
-        # if all beams are completed, sort and return (score, seq) pairs
-        if all([complete for _, complete, _ in curr_beam]):
-            curr_beam = sorted(curr_beam, reverse=True)[:num_return]
-            if return_scores:
-                generated_seqs = [
-                    (score, prefix) for score, complete, prefix in curr_beam
-                ]
-            else:
-                generated_seqs = [prefix for score, complete, prefix in curr_beam]
-            
-            if num_return == 1:
-                return generated_seqs[0]
-            else:
-                return generated_seqs
+            # if all beams are completed, sort and return (score, seq) pairs
+            if all([complete for _, complete, _ in curr_beam]):
+                curr_beam = sorted(curr_beam, reverse=True)[:num_return]
 
-        prev_beam = curr_beam
+                # pad beams that completed early 
+                lens = [prefix.size()[1] for _, _, prefix in curr_beam] 
+                max_len = max(lens)
+                padding = [Variable(torch.from_numpy([[padding_id] * (max_len - l)])) for l in lens]
+                padded = [(score, torch.cat((prefix, pad), dim=1)) for (score, _, prefix), pad in zip(curr_beam, padding)]
+                
+                if return_scores:
+                    generated_seqs = [(score, prefix) for score, prefix in padded]
+                else:
+                    generated_seqs = [prefix for score, prefix in padded]
+                
+                if num_return == 1:
+                    return generated_seqs[0]
+                else:
+                    return generated_seqs
+
+            prev_beam = curr_beam
 
     
