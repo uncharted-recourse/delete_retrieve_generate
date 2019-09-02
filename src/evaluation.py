@@ -108,6 +108,7 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
         )
     else:
         # calculate lb expected bleu loss with max_order ngrams of 4 independent of ngram_range in config
+        # TODO: replace max_length in bleu score
         loss = expected_bleu(decoder_probs, output_lines_tgt.cpu(), 
             torch.LongTensor([max_length] * batch_size),
             tgtlens, smooth=True)[0]

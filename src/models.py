@@ -131,7 +131,7 @@ class SeqModel(nn.Module):
             ctx_bridge_in = self.options['emb_dim']
         else:
             raise NotImplementedError('unknown encoder type')
-            
+
         # # # # # #  # # # # # #  # # # # #  NEW STUFF FROM STD SEQ2SEQ
         if self.model_type == 'delete':
             self.attribute_embedding = nn.Embedding(
@@ -232,7 +232,7 @@ class SeqModel(nn.Module):
         # TODO -- put this stuff in a method, overlaps w/above
 
         if self.model_type == 'delete':
-            # just do h i guess?
+            # just do h i guess?x
             a_ht = self.attribute_embedding(input_attr)
             if self.options['encoder'] == 'lstm':
                 c_t = torch.cat((c_t, a_ht), -1)
