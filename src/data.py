@@ -215,6 +215,7 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
     
     # permutation with parameter k for content words not dropped
     q = np.random.uniform(0, permutation + 1, len(content))
+    q = [q_i + i for q_i, i in zip(q, range(len(q)))]
     content = [tok for _, tok in sorted(zip(q,content))]
 
     return line, content, attribute_markers
