@@ -432,7 +432,6 @@ def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen,
     
     # get tensors in correct shape for prediction
     src_input = src_input.unsqueeze(0)
-    tgt_input = tgt_input.unsqueeze(0)
     srcmask = srcmask.unsqueeze(0)
     if auxmask is not None:
         auxmask = auxmask.unsqueeze(0)
@@ -440,7 +439,7 @@ def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen,
         tgt_input = tgt_input.cuda()
     decoder_logit, word_probs = model(src_input, tgt_input, srcmask, srclen,
         aux_input, auxmask, auxlen)
-    return decoder_logit[0, tgt_input.size()[1] - 1, :]
+    return decoder_logit.data.cpu().numpy()[0, -1, :]
 
 def decode_top_k(
     max_len,
@@ -547,9 +546,8 @@ def beam_search_decode(
                 curr_beam.add(prefix_score, True, prefix)
             else:
                 # run input through the model
-                decoder_logits, _ = model(src_input, prefix, srcmask, srclens,
+                decoder_logits = get_next_token_scores(src_input, prefix, srcmask, srclens,
                     aux_input, auxmask, auxlens)
-                decoder_logits = decoder_logits.data.cpu().numpy()[:,-1,:]
                 for next_id, next_score in enumerate(decoder_logits):
                     score = prefix_score + next_score
                     next_pred = Variable(torch.from_numpy([[next_id]]))
