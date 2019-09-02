@@ -478,14 +478,21 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     #   to compare across systems
 
     lines = [line[:max_len] for line in lines[index:index + batch_size]]
-
+    lens = [len(line) - 1 for line in lines]
+    max_len = max(lens)
+    if max_len >= 50:
+        print(f'Before token')
+        print(f'MAX LENGHT = {max_len}')
+        exit() 
     if dist_measurer is not None:
         lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
 
     lines = [tokenizer.encode(tokenizer.bos_token + " ".join(line) + tokenizer.eos_token) for line in lines]
     lens = [len(line) - 1 for line in lines]
     max_len = max(lens)
-    
+    if max_len >= 50:
+        print(f'MAX LENGHT = {max_len}') 
+        exit()
     input_lines = [
         line[:-1] +
         [get_padding_id(tokenizer)] * (max_len - len(line) + 1)

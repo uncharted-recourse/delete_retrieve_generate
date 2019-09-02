@@ -188,10 +188,8 @@ class SeqModel(nn.Module):
         self.c_bridge = nn.Linear(attr_size + ctx_bridge_in, bridge_out)
         self.h_bridge = nn.Linear(attr_size + ctx_bridge_in, bridge_out)
 
-
-        # TODO: should we tie the weights of this output projection to input if embeddings are the same?
         self.output_projection = nn.Linear(
-            self.options['tgt_hidden_dim'],
+            bridge_out,
             tgt_vocab_size)
         self.softmax = nn.Softmax(dim=-1)
 
@@ -208,7 +206,7 @@ class SeqModel(nn.Module):
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
         src_emb = self.src_embedding(input_src)
-
+        print(src_emb.size())
         srcmask = (1-srcmask).byte()
 
         if self.options['encoder'] == 'lstm':
@@ -224,7 +222,6 @@ class SeqModel(nn.Module):
 
         elif self.options['encoder'] == 'transformer':
             src_outputs = self.encoder(src_emb, srcmask)
-            src_outputs = self.ctx_bridge(src_outputs)
             h_t = None
             c_t = None
         # # # #  # # # #  # #  # # # # # # #  # # seq2seq diff
@@ -241,7 +238,10 @@ class SeqModel(nn.Module):
                 h_t = self.h_bridge(h_t)
             elif self.options['encoder'] == 'transformer':
                 a_ht = torch.unsqueeze(a_ht, 1)
+                print(a_ht.size())
+                print(src_outputs.size())
                 src_outputs = torch.cat((a_ht, src_outputs), 1)
+                src_outputs = self.ctx_bridge(src_outputs)
                 a_mask = Variable(torch.LongTensor([[0] for i in range(input_src.size(0))])).byte()
                 if CUDA:
                     a_mask = a_mask.cuda()
@@ -265,11 +265,10 @@ class SeqModel(nn.Module):
             elif self.options['encoder'] == 'transformer':
                 a_ht = self.attribute_encoder(attr_emb, attrmask)
                 src_outputs = torch.cat((a_ht, src_outputs), -1)
-
+                src_outputs = self.ctx_bridge(src_outputs)
 
         # # # #  # # # #  # #  # # # # # # #  # # end diff
         tgt_emb = self.tgt_embedding(input_tgt)
-        print(f'src size: {src_outputs.size()}')
         if self.options['decoder'] == 'lstm':
             tgt_outputs, (_, _) = self.decoder(
                 tgt_emb,
@@ -283,6 +282,7 @@ class SeqModel(nn.Module):
                 src_outputs, 
                 tgtmask,
                 srcmask)
+        print(f'src output: {src_outputs.size()}')
         print(f'tgt output: {tgt_outputs.size()}')
         tgt_outputs_reshape = tgt_outputs.contiguous().view(
             tgt_outputs.size()[0] * tgt_outputs.size()[1],

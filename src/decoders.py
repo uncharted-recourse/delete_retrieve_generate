@@ -70,7 +70,7 @@ class AttentionalLSTM(nn.Module):
         output = []
         timesteps = range(input.size(0))
         for i in timesteps:
-            if hidden[0] == None:
+            if type(hidden[0]) == type(None):
                 hy, cy = self.cell(input[i])
             else:
                 hy, cy = self.cell(input[i], hidden)
