@@ -563,10 +563,10 @@ def beam_search_decode(
                 for next_id, next_score in enumerate(decoder_logits):
                     score = prefix_score + next_score
                     next_pred = Variable(torch.from_numpy(np.array([[next_id]])))
-                    print(prefix)
                     new_prefix = torch.cat((prefix, next_pred), dim=1)
-                    print(new_prefix)
-                    now_complete = next_id == stop_id or new_prefix.size()[1] >= max_len
+                    # could pad after stacking, beam search to slow currently anyways...
+                    #now_complete = next_id == stop_id or new_prefix.size()[1] >= max_len
+                    now_complete = new_prefix.size()[1] >= max_len
                     curr_beam.add(score, now_complete, new_prefix)
         
             # if all beams are completed, sort and return (score, seq) pairs
@@ -583,7 +583,6 @@ def beam_search_decode(
                     generated_seqs = [(score, prefix) for score, _, prefix in curr_beam]
                 else:
                     generated_seqs = [prefix for score, _, prefix in curr_beam]
-                print(f'One beam decoding took {time.time() - s} seconds') 
                 if num_return == 1:
                     return generated_seqs[0]
                 else:
