@@ -18,6 +18,7 @@ import src.evaluation as evaluation
 from src.cuda import CUDA
 import src.data as data
 import src.models as models
+import random
 
 
 parser = argparse.ArgumentParser()
@@ -32,14 +33,16 @@ parser.add_argument(
     action='store_true'
 )
 parser.add_argument(
-    "--overfit",
+    "--overfit", 
     help="train continuously on one batch of data",
     action='store_true'
 )
 args = parser.parse_args()
 config = json.load(open(args.config, 'r'))
 
-working_dir = config['data']['working_dir']
+# save all checkpoint folders to checkpoint dir
+working_dir = os.path.join("checkpoints", config['data']['working_dir'])
+vocab_dir = os.path.join("checkpoints", config['data']['vocab_dir'])
 
 if not os.path.exists(working_dir):
     os.makedirs(working_dir)
@@ -55,69 +58,66 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename='%s/train_log' % working_dir,
 )
-
 console = logging.StreamHandler()
-console.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console.setFormatter(formatter)
+filelog = logging.FileHandler('%s/train_log' % working_dir)
+filelog.setFormatter(formatter)
 logger = logging.getLogger('')
 logger.addHandler(console)
+logger.addHandler(filelog)
 logger.setLevel(logging.INFO)
 
+# read data
 logging.info('Reading data ...')
-src, tgt = data.read_nmt_data(
-   src=config['data']['src'],
-   config=config,
-   tgt=config['data']['tgt'],
-   attribute_vocab=config['data']['attribute_vocab'],
-   ngram_attributes=config['data']['ngram_attributes']
-)
+input_lines_src = [l.strip().split() for l in open(config['data']['src'], 'r')]
+input_lines_tgt = [l.strip().split()  for l in open(config['data']['tgt'], 'r')]
+input_lines_src_test = [l.strip().split()  for l in open(config['data']['src_test'], 'r')]
+input_lines_tgt_test = [l.strip().split()  for l in open(config['data']['tgt_test'], 'r')]
 
+src, tgt = data.read_nmt_data(
+   src_lines=input_lines_src,
+   tgt_lines=input_lines_tgt,
+   config=config,
+   cache_dir=vocab_dir
+)
 src_test, tgt_test = data.read_nmt_data(
-    src=config['data']['src_test'],
+    src_lines=input_lines_src_test,
+    tgt_lines=input_lines_tgt_test,
     config=config,
-    tgt=config['data']['tgt_test'],
-    attribute_vocab=config['data']['attribute_vocab'],
-    ngram_attributes=config['data']['ngram_attributes'],
-    train_src=True,
-    train_tgt=tgt
+    train_src=src,
+    train_tgt=tgt,
+    cache_dir=vocab_dir
 )
 logging.info('...done!')
 
+# grab important params from config
 batch_size = config['data']['batch_size']
 max_length = config['data']['max_len']
-src_vocab_size = len(src['tok2id'])
-tgt_vocab_size = len(tgt['tok2id'])
-
-
-weight_mask = torch.ones(tgt_vocab_size)
-weight_mask[tgt['tok2id']['<pad>']] = 0
-loss_criterion = nn.CrossEntropyLoss(weight=weight_mask)
-if CUDA:
-    weight_mask = weight_mask.cuda()
-    loss_criterion = loss_criterion.cuda()
-
+src_vocab_size = tgt_vocab_size = len(src['tokenizer'])
+padding_id = data.get_padding_id(src['tokenizer'])
+assert padding_id == src['tokenizer'].vocab_size
 torch.manual_seed(config['training']['random_seed'])
 np.random.seed(config['training']['random_seed'])
+writer = SummaryWriter(working_dir)
 
-model = models.SeqModel(
+# define and load model
+model = models.FusedSeqModel(
    src_vocab_size=src_vocab_size,
    tgt_vocab_size=tgt_vocab_size,
-   pad_id_src=src['tok2id']['<pad>'],
-   pad_id_tgt=tgt['tok2id']['<pad>'],
-   config=config
+   pad_id_src=padding_id,
+   pad_id_tgt=padding_id,
+   config=config,
 )
-
-logging.info('MODEL HAS %s params' %  model.count_params())
+trainable, untrainable = model.count_params()
+logging.info(f'MODEL HAS {trainable} trainable params and {untrainable} untrainable params')
 model, start_epoch = models.attempt_load_model(
     model=model,
     checkpoint_dir=working_dir)
 if CUDA:
     model = model.cuda()
 
-writer = SummaryWriter(working_dir)
-
-
+# define learning rate and scheduler
 if config['training']['optimizer'] == 'adam':
     lr = config['training']['learning_rate']
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -125,8 +125,21 @@ elif config['training']['optimizer'] == 'sgd':
     lr = config['training']['learning_rate']
     optimizer = optim.SGD(model.parameters(), lr=lr)
 else:
-    raise NotImplementedError("Learning method not recommend for task")
+    raise NotImplementedError("Learning method not recommended for this task")
 
+scheduler_name = config['training']['scheduler']
+# reduce learning rate by a factor of 10 after plateau of 10 epochs
+if scheduler_name == 'plateau':
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
+elif scheduler_name == 'cyclic':
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
+        base_lr = lr,  
+        max_lr = 10 * lr
+    )
+else:
+    raise NotImplementedError("Learning scheduler not recommended for this task")
+
+# main training loop
 epoch_loss = []
 start_since_last_report = time.time()
 words_since_last_report = 0
@@ -138,7 +151,7 @@ num_batches = len(src['content']) / batch_size
 
 STEP = 0
 for epoch in range(start_epoch, config['training']['epochs']):
-    
+    epoch_start_time = time.time()
     if cur_metric > best_metric:
         # rm old checkpoint
         for ckpt_path in glob.glob(working_dir + '/model.*'):
@@ -157,32 +170,24 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
         batch_idx = i / batch_size
 
-        input_content, input_aux, output = data.minibatch(
-            src, tgt, i, batch_size, max_length, config['model']['model_type'])
-        input_lines_src, _, srclens, srcmask, _ = input_content
-        input_ids_aux, _, auxlens, auxmask, _ = input_aux
-        input_lines_tgt, output_lines_tgt, _, _, _ = output
-        
-        decoder_logit, decoder_probs = model(
-            input_lines_src, input_lines_tgt, srcmask, srclens,
-            input_ids_aux, auxlens, auxmask)
-
+        # calculate loss
         optimizer.zero_grad()
+        loss_crit = config['training']['loss_criterion']
+        train_loss, _ = evaluation.calculate_loss(src, tgt, config, i, batch_size, max_length, 
+            config['model']['model_type'], model, loss_crit, bt_ratio = config['training']['bt_ratio'])
+        loss_item = train_loss.item() if loss_crit == 'cross_entropy' else -train_loss.item()
+        losses.append(loss_item)
+        losses_since_last_report.append(loss_item)
+        epoch_loss.append(loss_item)
+        train_loss.backward()
 
-        loss = loss_criterion(
-            decoder_logit.contiguous().view(-1, tgt_vocab_size),
-            output_lines_tgt.view(-1)
-        )
-
-        losses.append(loss.item())
-        losses_since_last_report.append(loss.item())
-        epoch_loss.append(loss.item())
-        loss.backward()
+        # write information to tensorboard
         norm = nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_norm'])
-
         writer.add_scalar('stats/grad_norm', norm, STEP)
-
         optimizer.step()
+
+        if scheduler_name == 'cyclic':
+            writer.add_scalar('stats/lr', scheduler.get_lr(), STEP)
 
         if args.overfit or batch_idx % config['training']['batches_per_report'] == 0:
 
@@ -199,16 +204,25 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
         # NO SAMPLING!! because weird train-vs-test data stuff would be a pain
         STEP += 1
+
     if args.overfit:
         continue
     logging.info('EPOCH %s COMPLETE. EVALUATING...' % epoch)
+
+    # evaluate on dev set, update scheduler
     start = time.time()
     model.eval()
-    dev_loss = evaluation.evaluate_lpp(
+    dev_loss, mean_entropy = evaluation.evaluate_lpp(
             model, src_test, tgt_test, config)
 
     writer.add_scalar('eval/loss', dev_loss, epoch)
+    writer.add_scalar('stats/mean_entropy', mean_entropy, epoch)
+    if scheduler_name == 'plateau':
+        for param_group in optimizer.param_groups:
+            writer.add_scalar('stats/lr', param_group['lr'], epoch)
+        scheduler.step(dev_loss)
 
+    # write predictions and ground truths to checkpoint dir
     if args.bleu and epoch >= config['training'].get('inference_start_epoch', 1):
         
         cur_metric, edit_distance, inputs, preds, golds, auxs = evaluation.inference_metrics(
@@ -230,9 +244,9 @@ for epoch in range(start_epoch, config['training']['epochs']):
         cur_metric = dev_loss
    
     model.train()
-    logging.info('METRIC: %s. TIME: %.2fs CHECKPOINTING...' % (
-        cur_metric, (time.time() - start)))
+    logging.info('METRIC: %s. TIME: %.2fs CHECKPOINTING...' % (cur_metric, (time.time() - start)))
     avg_loss = np.mean(epoch_loss)
     epoch_loss = []
+    logging.info(f'Epoch took {time.time() - epoch_start_time} seconds')
 writer.close()
 

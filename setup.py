@@ -19,8 +19,7 @@ setup(
         "tensorboardX==1.7",
         "torch==1.1.0",
         "torchvision==0.3.0",
-        "tensorflow-datasets",
-        "tensorflow==1.14"
+        "pytorch_transformers",
     ],
     include_package_data=True,
 )

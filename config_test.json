@@ -12,8 +12,8 @@
     "bt_ratio": 0
   },
   "data": {
-    "src": "data/gyafc_raw/sentiment.train.0",
-    "tgt": "data/gyafc_raw/sentiment.train.1",
+    "src": "data/gyafc_raw/t",
+    "tgt": "data/gyafc_raw/t.1",
     "src_test": "data/gyafc_raw/sentiment.dev.0_",
     "tgt_test": "data/gyafc_raw/sentiment.dev.1_",
     "tokenizer": "gpt2",
