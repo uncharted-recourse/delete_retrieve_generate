@@ -75,24 +75,27 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
     
     # sample even number of samples from each corpus according to batch size, 
     # translate to next style in list
-    input_lines_src = srclens = srcmask = []
-    input_ids_aux = auxlens = auxmask = []
-    input_lines_tgt = output_lines_tgt = tgtlens = tgtmask = []
+    input_lines_src = srcmask = Variable(torch.LongTensor([[]]))
+    input_ids_aux = auxmask = Variable(torch.LongTensor([[]]))
+    input_lines_tgt = output_lines_tgt = tgtmask = Variable(torch.LongTensor([[]]))
+    srclens = auxlens = tgtlens = []
 
     for i in range(n_styles):
         tgt_idx = (i + 1) % n_styles if is_test else i
         input_content, input_aux, output = data.minibatch(
             dataset[i], dataset[tgt_idx], tgt_idx, batch_idx, sample_size, max_length, model_type)
-        input_lines_src.append(input_content[0])
+
+        input_lines_src = torch.cat((input_lines_src, input_content[0]), dim=0)
+        srcmask = torch.cat((srcmask, input_content[3]), dim=0)
+        input_ids_aux = torch.cat((input_ids_aux, input_aux[0]), dim=0)
+        auxmask = torch.cat((auxmask, input_aux[3]), dim=0)
+        input_lines_tgt = torch.cat((input_lines_tgt, output[0]), dim=0)
+        output_lines_tgt = torch.cat((output_lines_tgt, output[1]), dim=0)
+        tgtmask = torch.cat((tgtmask, output[3]), dim=0)
+
         srclens.append(input_content[2])
-        srclens.append(input_content[3])
-        input_ids_aux.append(input_aux[0])
         auxlens.append(input_aux[2])
-        auxmask.append(input_aux[3])
-        input_lines_tgt.append(output[0])
-        output_lines_tgt.append(output[1])
         tgtlens.append(output[2])
-        tgtmask.append(output[3])
     
     decoder_logit, decoder_probs = model(
         input_lines_src, input_lines_tgt, srcmask, srclens,
@@ -131,9 +134,10 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
 
     # get backtranslation minibatch (BT should be turned off for evaluation)
     if bt_ratio > 0 and not is_test:
-        bt_input_lines_src = bt_srclens = bt_srcmask = []
-        bt_input_ids_aux = bt_auxlens = bt_auxmask = []
-        bt_input_lines_tgt = bt_output_lines_tgt = bt_tgtlens = bt_tgtmask = []
+        bt_input_lines_src = bt_srcmask = Variable(torch.LongTensor([[]]))
+        bt_input_ids_aux = bt_auxmask = Variable(torch.LongTensor([[]]))
+        bt_input_lines_tgt = bt_output_lines_tgt = bt_tgtmask = Variable(torch.LongTensor([[]]))
+        bt_srclens = bt_auxlens = bt_tgtlens = []
 
         for i in range(n_styles):
             # in back_translation, randomly select style of initial translation
@@ -142,17 +146,19 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
                 tgt_idx = random.randint(0, n_styles - 1)
             input_content, input_aux, output = data.back_translation_minibatch(
                 dataset[i], dataset[tgt_idx], i, tgt_idx, batch_idx, sample_size, max_length, model_type)
-            bt_input_lines_src.append(input_content[0])
+            
+            bt_input_lines_src = torch.cat((input_lines_src, input_content[0]), dim=0)
+            bt_srcmask = torch.cat((srcmask, input_content[3]), dim=0)
+            bt_input_ids_aux = torch.cat((input_ids_aux, input_aux[0]), dim=0)
+            bt_auxmask = torch.cat((auxmask, input_aux[3]), dim=0)
+            bt_input_lines_tgt = torch.cat((input_lines_tgt, output[0]), dim=0)
+            bt_output_lines_tgt = torch.cat((output_lines_tgt, output[1]), dim=0)
+            bt_tgtmask = torch.cat((tgtmask, output[3]), dim=0)
+
             bt_srclens.append(input_content[2])
-            bt_srclens.append(input_content[3])
-            bt_input_ids_aux.append(input_aux[0])
             bt_auxlens.append(input_aux[2])
-            bt_auxmask.append(input_aux[3])
-            bt_input_lines_tgt.append(output[0])
-            bt_output_lines_tgt.append(output[1])
             bt_tgtlens.append(output[2])
-            bt_tgtmask.append(output[3])
-        
+            
         bt_decoder_logit, bt_decoder_probs = model(
             bt_input_lines_src, bt_input_lines_tgt, bt_srcmask, bt_srclens,
             bt_input_ids_aux, bt_auxlens, bt_auxmask, bt_tgtmask)
@@ -296,24 +302,28 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
         sys.stdout.flush()
 
         # get batch
-        input_lines_src = output_lines_src = srclens = srcmask = indices = []
-        input_ids_aux = auxlens = auxmask = []
-        input_lines_tgt = output_lines_tgt = []
+        input_lines_src = output_lines_src = srcmask = Variable(torch.LongTensor([[]]))
+        input_ids_aux = auxmask = Variable(torch.LongTensor([[]]))
+        input_lines_tgt = output_lines_tgt = Variable(torch.LongTensor([[]]))
+        srclens = auxlens = indices = []
+
 
         for i in range(len(content_lengths)):
             tgt_idx = (i + 1) % len(content_lengths)
             input_content, input_aux, output = data.minibatch(
                 test_data[i], test_data[tgt_idx], tgt_idx, batch_idx, sample_size, max_length, model_type)
-            input_lines_src.append(input_content[0])
-            output_lines_src.append(input_content[1])
+
+            input_lines_src = torch.cat((input_lines_src, input_content[0]), dim=0)
+            output_lines_src = torch.cat((output_lines_src, input_content[1]), dim=0)
+            srcmask = torch.cat((srcmask, input_content[3]), dim=0)
+            input_ids_aux = torch.cat((input_ids_aux, input_aux[0]), dim=0)
+            auxmask = torch.cat((auxmask, input_aux[3]), dim=0)
+            input_lines_tgt = torch.cat((input_lines_tgt, output[0]), dim=0)
+            output_lines_tgt = torch.cat((output_lines_tgt, output[1]), dim=0)
+
             srclens.append(input_content[2])
-            srclens.append(input_content[3])
-            indices.append(input_content[4])
-            input_ids_aux.append(input_aux[0])
             auxlens.append(input_aux[2])
-            auxmask.append(input_aux[3])
-            input_lines_tgt.append(output[0])
-            output_lines_tgt.append(output[1])
+            indices.append(input_content[4])
 
         # generate sequences according to decoding strategy
         tokenizer = test_data[0]['tokenizer']
