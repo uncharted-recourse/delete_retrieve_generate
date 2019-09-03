@@ -9,13 +9,12 @@
     "batches_per_sampling": 500,
     "random_seed": 1,
     "loss_criterion": "cross_entropy",
-    "bt_ratio": 0
+    "bt_ratio": 0,
+    "num_samples": 3 
   },
   "data": {
-    "src": "data/gyafc_raw/sentiment.train.0.reduced",
-    "tgt": "data/gyafc_raw/sentiment.train.1.reduced",
-    "src_test": "data/gyafc_raw/sentiment.dev.0_",
-    "tgt_test": "data/gyafc_raw/sentiment.dev.1_",
+    "train": ["data/gyafc_raw/sentiment.train.0.reduced", "data/gyafc_raw/sentiment.train.1.reduced"],
+    "test": ["data/gyafc_raw/sentiment.dev.0_", "data/gyafc_raw/sentiment.dev.1_"],
     "tokenizer": "gpt",
     "share_vocab": true,
     "noise": "word_attributes",

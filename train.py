@@ -75,23 +75,20 @@ logger.setLevel(logging.INFO)
 
 # read data
 logging.info('Reading data ...')
-input_lines_src = [l.strip().split() for l in open(config['data']['src'], 'r')]
-input_lines_tgt = [l.strip().split()  for l in open(config['data']['tgt'], 'r')]
-input_lines_src_test = [l.strip().split()  for l in open(config['data']['src_test'], 'r')]
-input_lines_tgt_test = [l.strip().split()  for l in open(config['data']['tgt_test'], 'r')]
+n_styles = len(config['data']['train'])
+input_lines_train = [[l.strip().split() for l in open(config['data']['train'][i], 'r')] for i in range(n_styles)]
+input_lines_test = [[l.strip().split() for l in open(config['data']['test'][i], 'r')] for i in range(n_styles)]
 
-src, tgt = data.read_nmt_data(
-   src_lines=input_lines_src,
-   tgt_lines=input_lines_tgt,
+train_data = data.read_nmt_data(
+   input_lines=input_lines_train,
+   n_styles = n_styles,
    config=config,
    cache_dir=vocab_dir
 )
-src_test, tgt_test = data.read_nmt_data(
-    src_lines=input_lines_src_test,
-    tgt_lines=input_lines_tgt_test,
+test_data = data.read_nmt_data(
+    input_lines=input_lines_test,
     config=config,
-    train_src=src,
-    train_tgt=tgt,
+    train_data=train_data,
     cache_dir=vocab_dir
 )
 logging.info('...done!')
@@ -99,8 +96,8 @@ logging.info('...done!')
 # grab important params from config
 batch_size = config['data']['batch_size']
 max_length = config['data']['max_len']
-src_vocab_size = tgt_vocab_size = len(src['tokenizer'])
-padding_id = data.get_padding_id(src['tokenizer'])
+src_vocab_size = tgt_vocab_size = len(train_data[0]['tokenizer'])
+padding_id = data.get_padding_id(train_data[0]['tokenizer'])
 torch.manual_seed(config['training']['random_seed'])
 np.random.seed(config['training']['random_seed'])
 writer = SummaryWriter(working_dir)
@@ -151,7 +148,9 @@ losses_since_last_report = []
 best_metric = 0.0
 best_epoch = 0
 cur_metric = 0.0 # log perplexity or BLEU
-num_batches = len(src['content']) / batch_size
+sample_size = batch_size // n_styles
+content_lengths = [len(datum['content']) for datum in train_data]
+num_batches = min(content_lengths) / sample_size
 
 STEP = 0
 for epoch in range(start_epoch, config['training']['epochs']):
@@ -167,17 +166,17 @@ for epoch in range(start_epoch, config['training']['epochs']):
         best_epoch = epoch - 1
 
     losses = []
-    for i in range(0, len(src['content']), batch_size):
+    for i in range(0, min(content_lengths), sample_size):
 
         if args.overfit:
             i = 50
 
-        batch_idx = i / batch_size
+        batch_idx = i / sample_size
 
         # calculate loss
         optimizer.zero_grad()
         loss_crit = config['training']['loss_criterion']
-        train_loss, _ = evaluation.calculate_loss(src, tgt, config, i, batch_size, max_length, 
+        train_loss, _ = evaluation.calculate_loss(train_data, n_styles, config, i, sample_size, max_length, 
             config['model']['model_type'], model, loss_crit, bt_ratio = config['training']['bt_ratio'])
         loss_item = train_loss.item() if loss_crit == 'cross_entropy' else -train_loss.item()
         losses.append(loss_item)
@@ -217,7 +216,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
     start = time.time()
     model.eval()
     dev_loss, mean_entropy = evaluation.evaluate_lpp(
-            model, src_test, tgt_test, config)
+            model, test_data, sample_size, config)
 
     writer.add_scalar('eval/loss', dev_loss, epoch)
     writer.add_scalar('stats/mean_entropy', mean_entropy, epoch)
@@ -229,8 +228,9 @@ for epoch in range(start_epoch, config['training']['epochs']):
     # write predictions and ground truths to checkpoint dir
     if args.bleu and epoch >= config['training'].get('inference_start_epoch', 1):
         
+        num_samples = config['training']['num_samples']
         cur_metric, edit_distance, inputs, preds, golds, auxs = evaluation.inference_metrics(
-            model, src_test, tgt_test, config)
+            model, test_data, sample_size, num_samples, config)
 
         with open(working_dir + '/auxs.%s' % epoch, 'w') as f:
             f.write('\n'.join(auxs) + '\n')

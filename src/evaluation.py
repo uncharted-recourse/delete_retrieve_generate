@@ -70,26 +70,39 @@ def get_edit_distance(hypotheses, reference):
 
     return ed * 1.0 / len(hypotheses)
 
-def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, model, loss_crit = 'cross_entropy', bt_ratio = 1):
+def calculate_loss(data, n_styles, config, batch_idx, sample_size, max_length, model_type, model, 
+                    loss_crit = 'cross_entropy', bt_ratio = 1, is_test = False):
     
-    use_src = random.random() < 0.5
+    # sample even number of samples from each corpus according to batch size, 
+    # translate to next style in list
+    input_lines_src = srclens = srcmask = []
+    input_ids_aux = auxlens = auxmask = []
+    input_lines_tgt = output_lines_tgt = tgtlens = tgtmask = []
 
-    # get normal minibatch
-    input_content, input_aux, output = data.minibatch(
-        src, tgt, i, batch_size, max_length, model_type, use_src=use_src)
-    input_lines_src, _, srclens, srcmask, _ = input_content
-    input_ids_aux, _, auxlens, auxmask, _ = input_aux
-    input_lines_tgt, output_lines_tgt, tgtlens, tgtmask, _ = output
+    for i in range(n_styles):
+        tgt_idx = (i + 1) % n_styles if is_test else i
+        input_content, input_aux, output = data.minibatch(
+            data[i], tgt[tgt_idx], tgt_idx, batch_idx, sample_size, max_length, model_type)
+        input_lines_src.append(input_content[0])
+        srclens.append(input_content[2])
+        srclens.append(input_content[3])
+        input_ids_aux.append(input_aux[0])
+        auxlens.append(input_aux[2])
+        auxmask.append(input_aux[3])
+        input_lines_tgt.append(output[0])
+        output_lines_tgt.append(output[1])
+        tgtlens.append(output[2])
+        tgtmask.append(output[3])
     
     decoder_logit, decoder_probs = model(
         input_lines_src, input_lines_tgt, srcmask, srclens,
         input_ids_aux, auxlens, auxmask, tgtmask)
     
     # calculate loss on two minibatches separately, weight losses w/ ratio
-    weight_mask = torch.ones(len(src['tokenizer']))
+    weight_mask = torch.ones(len(data[0]['tokenizer']))
     if CUDA:
         weight_mask = weight_mask.cuda()
-    padding_id = data.get_padding_id(src['tokenizer'])
+    padding_id = data.get_padding_id(data[0]['tokenizer'])
     weight_mask[padding_id] = 0
     
     # define loss criterion
@@ -103,26 +116,42 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
     # calculate loss 
     if loss_crit == 'cross_entropy':
         loss = loss_criterion(
-            decoder_logit.contiguous().view(-1, len(src['tokenizer'])),
+            decoder_logit.contiguous().view(-1, len(data[0]['tokenizer'])),
             output_lines_tgt.view(-1)
         )
     else:
         # calculate lb expected bleu loss with max_order ngrams of 4 independent of ngram_range in config
-        # TODO: replace max_length in bleu score
+        # decoder_logit.size()[1] is the max_length of a sequence for a given batch of translations
         loss = expected_bleu(decoder_probs, output_lines_tgt.cpu(), 
-            torch.LongTensor([max_length] * batch_size),
+            torch.LongTensor([decoder_logit.size()[1]] * sample_size * n_styles),
             tgtlens, smooth=True)[0]
 
     # mean entropy
     mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
 
-    # get backtranslation minibatch
-    if bt_ratio > 0:
-        bt_input_content, bt_input_aux, bt_output = data.back_translation_minibatch(
-            src, tgt, config, i, batch_size, max_length, model,  model_type, use_src=use_src)
-        bt_input_lines_src, _, bt_srclens, bt_srcmask, _ = bt_input_content
-        bt_input_ids_aux, _, bt_auxlens, bt_auxmask, _ = bt_input_aux
-        bt_input_lines_tgt, bt_output_lines_tgt, bt_tgtlens, bt_tgtmask, _ = bt_output
+    # get backtranslation minibatch (BT should be turned off for evaluation)
+    if bt_ratio > 0 and not is_test:
+        bt_input_lines_src = bt_srclens = bt_srcmask = []
+        bt_input_ids_aux = bt_auxlens = bt_auxmask = []
+        bt_input_lines_tgt = bt_output_lines_tgt = bt_tgtlens = bt_tgtmask = []
+
+        for i in range(n_styles):
+            # in back_translation, randomly select style of initial translation
+            tgt_idx = i
+            while tgt_idx == i:
+                tgt_idx = random.randint(0, n_styles - 1)
+            input_content, input_aux, output = data.back_translation_minibatch(
+                data[i], tgt[tgt_idx], i, tgt_idx, batch_idx, sample_size, max_length, model_type)
+            bt_input_lines_src.append(input_content[0])
+            bt_srclens.append(input_content[2])
+            bt_srclens.append(input_content[3])
+            bt_input_ids_aux.append(input_aux[0])
+            bt_auxlens.append(input_aux[2])
+            bt_auxmask.append(input_aux[3])
+            bt_input_lines_tgt.append(output[0])
+            bt_output_lines_tgt.append(output[1])
+            bt_tgtlens.append(output[2])
+            bt_tgtmask.append(output[3])
         
         bt_decoder_logit, bt_decoder_probs = model(
             bt_input_lines_src, bt_input_lines_tgt, bt_srcmask, bt_srclens,
@@ -131,12 +160,12 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
         # calculate loss
         if loss_crit == 'cross_entropy':
             bt_loss = loss_criterion(
-                bt_decoder_logit.contiguous().view(-1, len(src['tokenizer'])),
+                bt_decoder_logit.contiguous().view(-1, len(data[0]['tokenizer'])),
                 bt_output_lines_tgt.view(-1)
             )
         else:
             bt_loss = expected_bleu(bt_decoder_probs, bt_output_lines_tgt.cpu(), 
-                torch.LongTensor([max_length] * batch_size),
+                torch.LongTensor([bt_decoder_logit.size()[1]] * sample_size * n_styles),
                 bt_tgtlens, smooth=True)[0]
 
         # combine losses
@@ -252,38 +281,51 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
 
     return tgt_pred
 
-def decode_dataset(model, src, tgt, config):
+def decode_dataset(model, test_data, sample_size, num_samples, config):
     """Evaluate model."""
     inputs = []
     preds = []
     auxs = []
     ground_truths = []
-    for j in range(0, len(src['data']), config['data']['batch_size']):
-        sys.stdout.write("\r%s/%s..." % (j, len(src['data'])))
+
+    content_lengths = [len(datum['content']) for datum in test_data]
+    min_content_length = min(content_lengths)
+    upper_lim = min(min_content_length, num_samples * sample_size)
+    for j in range(0, upper_lim, sample_size):
+        sys.stdout.write("\r%s/%s..." % (j, upper_lim))
         sys.stdout.flush()
 
         # get batch
-        input_content, input_aux, output, = data.minibatch(
-            src, tgt, j, 
-            config['data']['batch_size'], 
-            config['data']['max_len'], 
-            config['model']['model_type'],
-            is_test=True)
-        input_lines_src, output_lines_src, srclens, srcmask, indices = input_content
-        input_ids_aux, _, auxlens, auxmask, _ = input_aux
-        input_lines_tgt, output_lines_tgt, _, _, _ = output
+        input_lines_src = output_lines_src = srclens = srcmask = indices = []
+        input_ids_aux = auxlens = auxmask = []
+        input_lines_tgt = output_lines_tgt = []
+
+        for i in range(len(content_lengths)):
+            tgt_idx = (i + 1) % len(content_lengths)
+            input_content, input_aux, output = data.minibatch(
+                test_data[i], test_data[tgt_idx], tgt_idx, batch_idx, sample_size, max_length, model_type)
+            input_lines_src.append(input_content[0])
+            output_lines_src.append(input_content[1])
+            srclens.append(input_content[2])
+            srclens.append(input_content[3])
+            indices.append(input_content[4])
+            input_ids_aux.append(input_aux[0])
+            auxlens.append(input_aux[2])
+            auxmask.append(input_aux[3])
+            input_lines_tgt.append(output[0])
+            output_lines_tgt.append(output[1])
 
         # generate sequences according to decoding strategy
-        tokenizer = src['tokenizer']
+        tokenizer = test_data[0]['tokenizer']
         tgt_pred = generate_sequences(
             tokenizer,
             model, 
             config,
             data.get_start_id(tokenizer),
             data.get_stop_id(tokenizer),
-            input_content,
-            input_aux,
-            output
+            (input_lines_src, output_lines_src, srclens, srcmask, indices),
+            (input_ids_aux, _, auxlens, auxmask, _),
+            (input_lines_tgt, output_lines_tgt, _, _, _)
         )
 
         # convert inputs/preds/targets/aux to human-readable form
@@ -301,10 +343,10 @@ def decode_dataset(model, src, tgt, config):
     return inputs, preds, ground_truths, auxs
 
 
-def inference_metrics(model, src, tgt, config):
+def inference_metrics(model, test_data, sample_size, num_samples, config):
     """ decode and evaluate bleu """
     inputs, preds, ground_truths, auxs = decode_dataset(
-        model, src, tgt, config)
+        model, test_data, sample_size, num_samples, config)
     bleu = get_bleu(preds, ground_truths)
     edit_distance = get_edit_distance(preds, ground_truths)
 
@@ -316,18 +358,20 @@ def inference_metrics(model, src, tgt, config):
     return bleu, edit_distance, inputs, preds, ground_truths, auxs
 
 
-def evaluate_lpp(model, src, tgt, config):
+def evaluate_lpp(model, test_data, sample_size, config):
     """ evaluate log perplexity WITHOUT decoding
         (i.e., with teacher forcing)
     """
     losses = []
-    for j in range(0, len(src['data']), config['data']['batch_size']):
+    content_lengths = [len(datum['content']) for datum in test_data]
+    min_content_length = min(content_lengths)
+    for j in range(0, min_content_length, sample_size):
         sys.stdout.write("\r%s/%s..." % (j, len(src['data'])))
         sys.stdout.flush()
 
         loss_crit = config['training']['loss_criterion']
-        combined_loss, combined_mean_entropy = calculate_loss(src, tgt, config, j, config['data']['batch_size'], config['data']['max_len'], 
-            config['model']['model_type'], model, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'])
+        combined_loss, combined_mean_entropy = calculate_loss(test_data, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
+            config['model']['model_type'], model, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test=True)
 
         loss_item = combined_loss.item() if loss_crit == 'cross_entropy' else -combined_loss.item()
         losses.append(loss_item)
