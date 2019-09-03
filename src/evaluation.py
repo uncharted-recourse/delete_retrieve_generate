@@ -241,7 +241,7 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
     elif config['model']['decode'] == 'top_k':
         start_time = time.time()
         tgt_pred = decode_top_k(
-            config['data']['max_len'], start_id, 
+            config['data']['max_len'], start_id, stop_id,
             model, input_lines_src, srclens, srcmask,
             input_ids_aux, auxlens, auxmask, 
             config['model']['k'], config['model']['temperature']
@@ -493,7 +493,7 @@ def decode_top_k(
     for i in range(max_len):
         # run input through the model
         decoder_logits, _ = model(src_input, tgt_input, srcmask, srclens,
-            aux_input, auxmask, auxlens)
+            aux_input, auxmask, auxlens, tgt_mask)
         decoder_logits = decoder_logits.data.cpu().numpy()[:,-1,:]
 
         # if k=1, do greedy sampling
@@ -509,7 +509,7 @@ def decode_top_k(
         next_preds = Variable(torch.from_numpy(sampled_indices))
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
         next_mask = [[0] if cur == [stop_id] or prev == [0] else [1] 
-            for cur, prev in zip(decoder_argmax, prev_mask)]
+            for cur, prev in zip(sampled_indices, prev_mask)]
         next_mask = Variable(torch.from_numpy(np.array(next_mask)))
         if CUDA:
             next_preds = next_preds.cuda()
