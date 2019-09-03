@@ -70,7 +70,7 @@ def get_edit_distance(hypotheses, reference):
 
     return ed * 1.0 / len(hypotheses)
 
-def calculate_loss(data, n_styles, config, batch_idx, sample_size, max_length, model_type, model, 
+def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length, model_type, model, 
                     loss_crit = 'cross_entropy', bt_ratio = 1, is_test = False):
     
     # sample even number of samples from each corpus according to batch size, 
@@ -82,7 +82,7 @@ def calculate_loss(data, n_styles, config, batch_idx, sample_size, max_length, m
     for i in range(n_styles):
         tgt_idx = (i + 1) % n_styles if is_test else i
         input_content, input_aux, output = data.minibatch(
-            data[i], tgt[tgt_idx], tgt_idx, batch_idx, sample_size, max_length, model_type)
+            dataset[i], dataset[tgt_idx], tgt_idx, batch_idx, sample_size, max_length, model_type)
         input_lines_src.append(input_content[0])
         srclens.append(input_content[2])
         srclens.append(input_content[3])
@@ -99,10 +99,10 @@ def calculate_loss(data, n_styles, config, batch_idx, sample_size, max_length, m
         input_ids_aux, auxlens, auxmask, tgtmask)
     
     # calculate loss on two minibatches separately, weight losses w/ ratio
-    weight_mask = torch.ones(len(data[0]['tokenizer']))
+    weight_mask = torch.ones(len(dataset[0]['tokenizer']))
     if CUDA:
         weight_mask = weight_mask.cuda()
-    padding_id = data.get_padding_id(data[0]['tokenizer'])
+    padding_id = data.get_padding_id(dataset[0]['tokenizer'])
     weight_mask[padding_id] = 0
     
     # define loss criterion
@@ -116,7 +116,7 @@ def calculate_loss(data, n_styles, config, batch_idx, sample_size, max_length, m
     # calculate loss 
     if loss_crit == 'cross_entropy':
         loss = loss_criterion(
-            decoder_logit.contiguous().view(-1, len(data[0]['tokenizer'])),
+            decoder_logit.contiguous().view(-1, len(dataset[0]['tokenizer'])),
             output_lines_tgt.view(-1)
         )
     else:
@@ -141,7 +141,7 @@ def calculate_loss(data, n_styles, config, batch_idx, sample_size, max_length, m
             while tgt_idx == i:
                 tgt_idx = random.randint(0, n_styles - 1)
             input_content, input_aux, output = data.back_translation_minibatch(
-                data[i], tgt[tgt_idx], i, tgt_idx, batch_idx, sample_size, max_length, model_type)
+                dataset[i], dataset[tgt_idx], i, tgt_idx, batch_idx, sample_size, max_length, model_type)
             bt_input_lines_src.append(input_content[0])
             bt_srclens.append(input_content[2])
             bt_srclens.append(input_content[3])
@@ -160,7 +160,7 @@ def calculate_loss(data, n_styles, config, batch_idx, sample_size, max_length, m
         # calculate loss
         if loss_crit == 'cross_entropy':
             bt_loss = loss_criterion(
-                bt_decoder_logit.contiguous().view(-1, len(data[0]['tokenizer'])),
+                bt_decoder_logit.contiguous().view(-1, len(dataset[0]['tokenizer'])),
                 bt_output_lines_tgt.view(-1)
             )
         else:

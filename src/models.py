@@ -136,7 +136,7 @@ class SeqModel(nn.Module):
         if self.model_type == 'delete':
             self.attribute_embedding = nn.Embedding(
                 # TODO change num to num styles supported
-                num_embeddings=len(config['data']['test_data']), 
+                num_embeddings=len(config['data']['test']), 
                 embedding_dim=self.options['emb_dim'])
             if self.options['encoder'] == 'lstm':
                 attr_size = self.options['emb_dim']

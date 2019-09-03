@@ -206,10 +206,10 @@ def calculate_ngram_attribute_vocab(input_lines, salience_threshold, ngram_range
             for sentence in tqdm(corpus):
                 for i in range(1, ngram_range):
                     i_grams = ngrams(sentence.split(), i)
-                    joined.extend[
+                    joined.extend([
                         " ".join(gram)
                         for gram in i_grams
-                    ]
+                    ])
         # find unique n_grams across all corpii
         unique_grams = np.unique(np.array(joined))
 
