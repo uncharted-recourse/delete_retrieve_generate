@@ -175,13 +175,12 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
         decoder_logit, word_probs = model(src_input, tgt_input, srcmask, srclens,
             aux_input, auxmask, auxlens, tgt_mask)
         decoder_argmax = word_probs.data.cpu().numpy()[:,-1,:].argmax(axis=-1)
+        
         # select the predicted "next" tokens, attach to target-side inputs
         next_preds = Variable(torch.from_numpy(decoder_argmax))
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
         next_mask = [[0] if cur == [stop_id] or prev == [0] else [1] 
             for cur, prev in zip(decoder_argmax, prev_mask)]
-        print(next_mask)
-        print(tgt_mask)
         next_mask = Variable(torch.from_numpy(np.array(next_mask)))
         if CUDA:
             next_preds = next_preds.cuda()
@@ -426,7 +425,7 @@ def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True
     elif config['model']['decode'] == 'top_k':
         start_time = time.time()
         tgt_pred = decode_top_k(
-            max_len, start_id, 
+            max_len, start_id, stop_id,
             model, content, content_length, content_mask,
             attributes, attributes_len, attributes_mask, 
             config['model']['k'], config['model']['temperature']
@@ -461,6 +460,7 @@ def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen,
 def decode_top_k(
     max_len,
     start_id,
+    stop_id,
     model,
     src_input,
     srclens,
@@ -479,8 +479,16 @@ def decode_top_k(
         ]
     ))
 
+    # initialize target mask for Transformer decoder
+    tgt_mask = Variable(torch.LongTensor(
+        [
+            [1] for i in range(src_input.size(0))
+        ]
+    ))
+
     if CUDA:
         tgt_input = tgt_input.cuda()
+        tgt_mask = tgt_mask.cuda()
 
     for i in range(max_len):
         # run input through the model
@@ -490,7 +498,6 @@ def decode_top_k(
 
         # if k=1, do greedy sampling
         if k == 1:
-            s = time.time()
             sampled_indices = decoder_logits.argmax(axis=-1)
         # if k > 1, do softmax sampling over the top-k
         elif k:
@@ -500,9 +507,15 @@ def decode_top_k(
             inds = [sample_softmax(top, temperature=temperature) for top in top_scores]
             sampled_indices = np.array([x[idx] for x,idx in zip(top_ids, inds)])
         next_preds = Variable(torch.from_numpy(sampled_indices))
+        prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
+        next_mask = [[0] if cur == [stop_id] or prev == [0] else [1] 
+            for cur, prev in zip(decoder_argmax, prev_mask)]
+        next_mask = Variable(torch.from_numpy(np.array(next_mask)))
         if CUDA:
             next_preds = next_preds.cuda()
+            next_mask = next_mask.cuda()
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
+        tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
     return tgt_input
 
 class Beam(object):

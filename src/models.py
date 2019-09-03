@@ -206,7 +206,7 @@ class SeqModel(nn.Module):
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
         src_emb = self.src_embedding(input_src)
-        print(src_emb.size())
+        #print(src_emb.size())
         srcmask = (1-srcmask).byte()
 
         if self.options['encoder'] == 'lstm':
@@ -238,8 +238,6 @@ class SeqModel(nn.Module):
                 h_t = self.h_bridge(h_t)
             elif self.options['encoder'] == 'transformer':
                 a_ht = torch.unsqueeze(a_ht, 1)
-                print(a_ht.size())
-                print(src_outputs.size())
                 src_outputs = torch.cat((a_ht, src_outputs), 1)
                 src_outputs = self.ctx_bridge(src_outputs)
                 a_mask = Variable(torch.LongTensor([[0] for i in range(input_src.size(0))])).byte()
@@ -282,13 +280,14 @@ class SeqModel(nn.Module):
                 src_outputs, 
                 tgtmask,
                 srcmask)
-        print(f'src output: {src_outputs.size()}')
-        print(f'tgt output: {tgt_outputs.size()}')
+
+        #print(f'src output: {src_outputs.size()}')
+        #print(f'tgt output: {tgt_outputs.size()}')
         tgt_outputs_reshape = tgt_outputs.contiguous().view(
             tgt_outputs.size()[0] * tgt_outputs.size()[1],
             tgt_outputs.size()[2])
-        print(f'tgt output reshape: {tgt_outputs_reshape.size()}')
-        # Should we tie these weights to decoder input embedding?
+        #print(f'tgt output reshape: {tgt_outputs_reshape.size()}')
+
         decoder_logit = self.output_projection(tgt_outputs_reshape)
         decoder_logit = decoder_logit.view(
             tgt_outputs.size()[0],
