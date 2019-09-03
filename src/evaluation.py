@@ -168,6 +168,7 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
 
     if CUDA:
         tgt_input = tgt_input.cuda()
+        tgt_mask = tgt_mask.cuda()
 
     for i in range(max_len):
         # run input through the model
@@ -176,13 +177,17 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
         decoder_argmax = word_probs.data.cpu().numpy()[:,-1,:].argmax(axis=-1)
         # select the predicted "next" tokens, attach to target-side inputs
         next_preds = Variable(torch.from_numpy(decoder_argmax))
-        next_mask = [[0]] if decoder_argmax == stop_id else [[1]]
+        prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
+        next_mask = [[0] if cur == [stop_id] or prev == [0] else [1] 
+            for cur, prev in zip(decoder_argmax, prev_mask)]
+        print(next_mask)
+        print(tgt_mask)
         next_mask = Variable(torch.from_numpy(np.array(next_mask)))
         if CUDA:
             next_preds = next_preds.cuda()
             next_mask = next_mask.cuda()
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
-        tgt_mask = torch.cat((tgt_mask, next_mask.unsqueeze(1)), dim=1)
+        tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
 
     return tgt_input
 
@@ -212,7 +217,7 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
     start_time = time.time()
     if config['model']['decode'] == 'greedy':
         tgt_pred = decode_minibatch_greedy(
-            config['data']['max_len'], start_id, 
+            config['data']['max_len'], start_id, stop_id, 
             model, input_lines_src, srclens, srcmask,
             input_ids_aux, auxlens, auxmask)
         log(f'greedy search decoding took: {time.time() - start_time}', level='debug')
