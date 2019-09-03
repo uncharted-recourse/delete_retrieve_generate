@@ -74,29 +74,12 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
                     loss_crit = 'cross_entropy', bt_ratio = 1, is_test = False):
     
     # sample even number of samples from each corpus according to batch size, 
-    # translate to next style in list
-    input_lines_src = srcmask = Variable(torch.LongTensor([[]]))
-    input_ids_aux = auxmask = Variable(torch.LongTensor([[]]))
-    input_lines_tgt = output_lines_tgt = tgtmask = Variable(torch.LongTensor([[]]))
-    srclens = auxlens = tgtlens = []
+    src_packed, auxs_packed, tgt_packed = data.even_minibatch_sample(dataset, n_styles, batch_idx, 
+        sample_size, max_length, model_type, is_test = is_test)
+    input_lines_src, _, srclens, srcmask, _ = src_packed
+    input_ids_aux, _, auxlens, auxmask, _ = auxs_packed
+    input_lines_tgt, output_lines_tgt, tgtlens, tgtmask, _ = tgt_packed
 
-    for i in range(n_styles):
-        tgt_idx = (i + 1) % n_styles if is_test else i
-        input_content, input_aux, output = data.minibatch(
-            dataset[i], dataset[tgt_idx], tgt_idx, batch_idx, sample_size, max_length, model_type)
-
-        input_lines_src = torch.cat((input_lines_src, input_content[0]), dim=0)
-        srcmask = torch.cat((srcmask, input_content[3]), dim=0)
-        input_ids_aux = torch.cat((input_ids_aux, input_aux[0]), dim=0)
-        auxmask = torch.cat((auxmask, input_aux[3]), dim=0)
-        input_lines_tgt = torch.cat((input_lines_tgt, output[0]), dim=0)
-        output_lines_tgt = torch.cat((output_lines_tgt, output[1]), dim=0)
-        tgtmask = torch.cat((tgtmask, output[3]), dim=0)
-
-        srclens.append(input_content[2])
-        auxlens.append(input_aux[2])
-        tgtlens.append(output[2])
-    
     decoder_logit, decoder_probs = model(
         input_lines_src, input_lines_tgt, srcmask, srclens,
         input_ids_aux, auxlens, auxmask, tgtmask)
@@ -134,31 +117,13 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
 
     # get backtranslation minibatch (BT should be turned off for evaluation)
     if bt_ratio > 0 and not is_test:
-        bt_input_lines_src = bt_srcmask = Variable(torch.LongTensor([[]]))
-        bt_input_ids_aux = bt_auxmask = Variable(torch.LongTensor([[]]))
-        bt_input_lines_tgt = bt_output_lines_tgt = bt_tgtmask = Variable(torch.LongTensor([[]]))
-        bt_srclens = bt_auxlens = bt_tgtlens = []
 
-        for i in range(n_styles):
-            # in back_translation, randomly select style of initial translation
-            tgt_idx = i
-            while tgt_idx == i:
-                tgt_idx = random.randint(0, n_styles - 1)
-            input_content, input_aux, output = data.back_translation_minibatch(
-                dataset[i], dataset[tgt_idx], i, tgt_idx, batch_idx, sample_size, max_length, model_type)
-            
-            bt_input_lines_src = torch.cat((input_lines_src, input_content[0]), dim=0)
-            bt_srcmask = torch.cat((srcmask, input_content[3]), dim=0)
-            bt_input_ids_aux = torch.cat((input_ids_aux, input_aux[0]), dim=0)
-            bt_auxmask = torch.cat((auxmask, input_aux[3]), dim=0)
-            bt_input_lines_tgt = torch.cat((input_lines_tgt, output[0]), dim=0)
-            bt_output_lines_tgt = torch.cat((output_lines_tgt, output[1]), dim=0)
-            bt_tgtmask = torch.cat((tgtmask, output[3]), dim=0)
+        src_packed, auxs_packed, tgt_packed = data.even_minibatch_sample(dataset, n_styles, batch_idx, 
+            sample_size, max_length, model_type, is_bt = True)
+        bt_input_lines_src, _, bt_srclens, bt_srcmask, _ = src_packed
+        bt_input_ids_aux, _, bt_auxlens, bt_auxmask, _ = auxs_packed
+        bt_input_lines_tgt, bt_output_lines_tgt, bt_tgtlens, bt_tgtmask, _ = tgt_packed
 
-            bt_srclens.append(input_content[2])
-            bt_auxlens.append(input_aux[2])
-            bt_tgtlens.append(output[2])
-            
         bt_decoder_logit, bt_decoder_probs = model(
             bt_input_lines_src, bt_input_lines_tgt, bt_srcmask, bt_srclens,
             bt_input_ids_aux, bt_auxlens, bt_auxmask, bt_tgtmask)
@@ -302,28 +267,8 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
         sys.stdout.flush()
 
         # get batch
-        input_lines_src = output_lines_src = srcmask = Variable(torch.LongTensor([[]]))
-        input_ids_aux = auxmask = Variable(torch.LongTensor([[]]))
-        input_lines_tgt = output_lines_tgt = Variable(torch.LongTensor([[]]))
-        srclens = auxlens = indices = []
-
-
-        for i in range(len(content_lengths)):
-            tgt_idx = (i + 1) % len(content_lengths)
-            input_content, input_aux, output = data.minibatch(
-                test_data[i], test_data[tgt_idx], tgt_idx, batch_idx, sample_size, max_length, model_type)
-
-            input_lines_src = torch.cat((input_lines_src, input_content[0]), dim=0)
-            output_lines_src = torch.cat((output_lines_src, input_content[1]), dim=0)
-            srcmask = torch.cat((srcmask, input_content[3]), dim=0)
-            input_ids_aux = torch.cat((input_ids_aux, input_aux[0]), dim=0)
-            auxmask = torch.cat((auxmask, input_aux[3]), dim=0)
-            input_lines_tgt = torch.cat((input_lines_tgt, output[0]), dim=0)
-            output_lines_tgt = torch.cat((output_lines_tgt, output[1]), dim=0)
-
-            srclens.append(input_content[2])
-            auxlens.append(input_aux[2])
-            indices.append(input_content[4])
+        src_packed, auxs_packed, tgt_packed = data.even_minibatch_sample(dataset, n_styles, batch_idx, 
+            sample_size, max_length, model_type, is_test = True)
 
         # generate sequences according to decoding strategy
         tokenizer = test_data[0]['tokenizer']
@@ -333,9 +278,9 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
             config,
             data.get_start_id(tokenizer),
             data.get_stop_id(tokenizer),
-            (input_lines_src, output_lines_src, srclens, srcmask, indices),
-            (input_ids_aux, _, auxlens, auxmask, _),
-            (input_lines_tgt, output_lines_tgt, _, _, _)
+            src_packed,
+            auxs_packed,
+            tgt_packed
         )
 
         # convert inputs/preds/targets/aux to human-readable form

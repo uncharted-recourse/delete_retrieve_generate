@@ -573,6 +573,58 @@ def minibatch(in_dataset, out_dataset, attribute_id, idx, batch_size, max_len, m
 
     return inputs, attributes, outputs
 
+def even_minibatch_sample(dataset, n_styles, batch_idx, sample_size, max_length, model_type, 
+    is_test = False, is_bt = False)
+    
+    # sample even number of samples from each corpus according to batch size
+    input_lines_src = output_lines_src = srcmask = Variable(torch.LongTensor([[]]))
+    input_ids_aux = auxmask = Variable(torch.LongTensor([[]]))
+    input_lines_tgt = output_lines_tgt = tgtmask = Variable(torch.LongTensor([[]]))
+    srclens = auxlens = tgtlens = indices = []
+
+    if CUDA:
+        input_lines_src = input_lines_src.cuda()
+        srcmask = srcmask.cuda()
+        input_ids_aux = input_ids_aux.cuda()
+        auxmask = auxmask.cuda()
+        input_lines_tgt = input_lines_tgt.cuda()
+        output_lines_tgt = output_lines_tgt.cuda()
+        tgtmask = tgtmask.cuda()
+    
+    for i in range(n_styles):
+        if is_bt:
+            tgt_idx = i
+            while tgt_idx == i:
+                tgt_idx = random.randint(0, n_styles - 1)
+            input_content, input_aux, output = data.back_translation_minibatch(
+                dataset[i], dataset[tgt_idx], i, tgt_idx, batch_idx, sample_size, 
+                max_length, model_type)
+        else:
+            # translate to next style in list if test
+            tgt_idx = (i + 1) % n_styles if is_test else i
+            input_content, input_aux, output = data.minibatch(
+                dataset[i], dataset[tgt_idx], tgt_idx, batch_idx, sample_size, 
+                max_length, model_type)
+
+        input_lines_src = torch.cat((input_lines_src, input_content[0]), dim=0)
+        output_lines_src = torch.cat((output_lines_src, input_content[1]), dim=0)
+        srcmask = torch.cat((srcmask, input_content[3]), dim=0)
+        input_ids_aux = torch.cat((input_ids_aux, input_aux[0]), dim=0)
+        auxmask = torch.cat((auxmask, input_aux[3]), dim=0)
+        input_lines_tgt = torch.cat((input_lines_tgt, output[0]), dim=0)
+        output_lines_tgt = torch.cat((output_lines_tgt, output[1]), dim=0)
+        tgtmask = torch.cat((tgtmask, output[3]), dim=0)
+
+        srclens.append(input_content[2])
+        auxlens.append(input_aux[2])
+        tgtlens.append(output[2])
+        indices.append(input_content[4])
+    
+    src_packed = (input_lines_src, output_lines_src, srclens, srcmask, indices)
+    auxs_packed = (input_ids_aux, _, auxlens, auxmask, _)
+    tgt_packed = (input_lines_tgt, output_lines_tgt, tgtlens, tgtmask, _)
+    
+    return src_packed, auxs_packed, tgt_packed
 
 def unsort(arr, idx):
     """unsort a list given idx: a list of each element's 'origin' index pre-sorting
