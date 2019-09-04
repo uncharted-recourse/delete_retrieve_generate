@@ -87,6 +87,7 @@ train_data = data.read_nmt_data(
 )
 test_data = data.read_nmt_data(
     input_lines=input_lines_test,
+    n_styles = n_styles,
     config=config,
     train_data=train_data,
     cache_dir=vocab_dir

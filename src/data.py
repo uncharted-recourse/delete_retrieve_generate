@@ -574,27 +574,27 @@ def minibatch(in_dataset, out_dataset, attribute_id, idx, batch_size, max_len, m
     return inputs, attributes, outputs
 
 def even_minibatch_sample(dataset, n_styles, batch_idx, sample_size, max_length, model_type, 
-    is_test = False, is_bt = False)
+    is_test = False, is_bt = False):
     
     # sample even number of samples from each corpus according to batch size
-    input_lines_src = output_lines_src = srcmask = Variable(torch.LongTensor())
+    input_lines_src = output_lines_src = Variable(torch.LongTensor())
     input_ids_aux = Variable(torch.LongTensor())
-    input_lines_tgt = output_lines_tgt = tgtmask = Variable(torch.LongTensor())
+    input_lines_tgt = output_lines_tgt = Variable(torch.LongTensor())
     srclens = tgtlens = indices = []
+    srcmask = tgtmask = Variable(torch.FloatTensor())
 
     if CUDA:
         input_lines_src = input_lines_src.cuda()
         output_lines_src = output_lines_src.cuda()
         srcmask = srcmask.cuda()
         input_ids_aux = input_ids_aux.cuda()
-        auxmask = auxmask.cuda()
         input_lines_tgt = input_lines_tgt.cuda()
         output_lines_tgt = output_lines_tgt.cuda()
         tgtmask = tgtmask.cuda()
 
     # only create auxmask tensor if attributes are discrete tokens
     if model_type == 'delete_retrieve':
-        auxmask = Variable(torch.LongTensor())
+        auxmask = Variable(torch.FloatTensor())
         if CUDA:
             auxmask = auxmask.cuda()
     else:
@@ -605,16 +605,18 @@ def even_minibatch_sample(dataset, n_styles, batch_idx, sample_size, max_length,
             tgt_idx = i
             while tgt_idx == i:
                 tgt_idx = random.randint(0, n_styles - 1)
-            input_content, input_aux, output = data.back_translation_minibatch(
+            input_content, input_aux, output = back_translation_minibatch(
                 dataset[i], dataset[tgt_idx], i, tgt_idx, batch_idx, sample_size, 
                 max_length, model_type)
         else:
             # translate to next style in list if test
             tgt_idx = (i + 1) % n_styles if is_test else i
-            input_content, input_aux, output = data.minibatch(
+            input_content, input_aux, output = minibatch(
                 dataset[i], dataset[tgt_idx], tgt_idx, batch_idx, sample_size, 
                 max_length, model_type)
 
+        print(input_lines_src.size())
+        print(input_content[0].size())
         input_lines_src = torch.cat((input_lines_src, input_content[0]), dim=0)
         output_lines_src = torch.cat((output_lines_src, input_content[1]), dim=0)
         srcmask = torch.cat((srcmask, input_content[3]), dim=0)
@@ -627,7 +629,7 @@ def even_minibatch_sample(dataset, n_styles, batch_idx, sample_size, max_length,
         tgtlens.append(output[2])
         indices.append(input_content[4])
 
-        if model_type == 'delete':
+        if model_type == 'delete_retrieve':
             auxmask = torch.cat((auxmask, input_aux[3]), dim=0)
             auxlens.append(input_aux[2])
     
