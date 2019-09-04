@@ -577,13 +577,14 @@ def even_minibatch_sample(dataset, n_styles, batch_idx, sample_size, max_length,
     is_test = False, is_bt = False)
     
     # sample even number of samples from each corpus according to batch size
-    input_lines_src = output_lines_src = srcmask = Variable(torch.LongTensor([[]]))
-    input_ids_aux = Variable(torch.LongTensor([[]]))
-    input_lines_tgt = output_lines_tgt = tgtmask = Variable(torch.LongTensor([[]]))
+    input_lines_src = output_lines_src = srcmask = Variable(torch.LongTensor())
+    input_ids_aux = Variable(torch.LongTensor())
+    input_lines_tgt = output_lines_tgt = tgtmask = Variable(torch.LongTensor())
     srclens = tgtlens = indices = []
 
     if CUDA:
         input_lines_src = input_lines_src.cuda()
+        output_lines_src = output_lines_src.cuda()
         srcmask = srcmask.cuda()
         input_ids_aux = input_ids_aux.cuda()
         auxmask = auxmask.cuda()
@@ -593,7 +594,7 @@ def even_minibatch_sample(dataset, n_styles, batch_idx, sample_size, max_length,
 
     # only create auxmask tensor if attributes are discrete tokens
     if model_type == 'delete_retrieve':
-        auxmask = Variable(torch.LongTensor([[]]))
+        auxmask = Variable(torch.LongTensor())
         if CUDA:
             auxmask = auxmask.cuda()
     else:
