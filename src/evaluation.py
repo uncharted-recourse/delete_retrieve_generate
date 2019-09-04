@@ -74,7 +74,7 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
                     loss_crit = 'cross_entropy', bt_ratio = 1, is_test = False):
     
     # sample even number of samples from each corpus according to batch size, 
-    src_packed, auxs_packed, tgt_packed = data.even_minibatch_sample(dataset, n_styles, batch_idx, 
+    src_packed, auxs_packed, tgt_packed = data.minibatch(dataset, batch_idx, 
         sample_size, max_length, model_type, is_test = is_test)
     input_lines_src, _, srclens, srcmask, _ = src_packed
     input_ids_aux, _, auxlens, auxmask, _ = auxs_packed
@@ -118,7 +118,7 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
     # get backtranslation minibatch (BT should be turned off for evaluation)
     if bt_ratio > 0 and not is_test:
 
-        src_packed, auxs_packed, tgt_packed = data.even_minibatch_sample(dataset, n_styles, batch_idx, 
+        src_packed, auxs_packed, tgt_packed = data.back_translation_minibatch(dataset, batch_idx, 
             sample_size, max_length, model_type, is_bt = True)
         bt_input_lines_src, _, bt_srclens, bt_srcmask, _ = src_packed
         bt_input_ids_aux, _, bt_auxlens, bt_auxmask, _ = auxs_packed
