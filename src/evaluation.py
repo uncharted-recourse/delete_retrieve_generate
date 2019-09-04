@@ -69,13 +69,13 @@ def get_edit_distance(hypotheses, reference):
 
     return ed * 1.0 / len(hypotheses)
 
-def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, model, loss_crit = 'cross_entropy', bt_ratio = 1):
+def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, model, loss_crit = 'cross_entropy', bt_ratio = 1, is_test = False):
     
     use_src = random.random() < 0.5
 
     # get normal minibatch
     input_content, input_aux, output = data.minibatch(
-        src, tgt, i, batch_size, max_length, model_type, use_src=use_src)
+        src, tgt, i, batch_size, max_length, model_type, use_src=use_src, is_test = is_test)
     input_lines_src, _, srclens, srcmask, _ = input_content
     input_ids_aux, _, auxlens, auxmask, _ = input_aux
     input_lines_tgt, output_lines_tgt, tgtlens, _, _ = output
@@ -115,7 +115,7 @@ def calculate_loss(src, tgt, config, i, batch_size, max_length, model_type, mode
     mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
 
     # get backtranslation minibatch
-    if bt_ratio > 0:
+    if bt_ratio > 0 and not is_test:
         bt_input_content, bt_input_aux, bt_output = data.back_translation_minibatch(
             src, tgt, config, i, batch_size, max_length, model,  model_type, use_src=use_src)
         bt_input_lines_src, _, bt_srclens, bt_srcmask, _ = bt_input_content
@@ -318,7 +318,7 @@ def evaluate_lpp(model, src, tgt, config):
 
         loss_crit = config['training']['loss_criterion']
         combined_loss, combined_mean_entropy = calculate_loss(src, tgt, config, j, config['data']['batch_size'], config['data']['max_len'], 
-            config['model']['model_type'], model, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'])
+            config['model']['model_type'], model, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test = True)
 
         loss_item = combined_loss.item() if loss_crit == 'cross_entropy' else -combined_loss.item()
         losses.append(loss_item)
