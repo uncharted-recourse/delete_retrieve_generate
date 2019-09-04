@@ -578,9 +578,9 @@ def even_minibatch_sample(dataset, n_styles, batch_idx, sample_size, max_length,
     
     # sample even number of samples from each corpus according to batch size
     input_lines_src = output_lines_src = srcmask = Variable(torch.LongTensor([[]]))
-    input_ids_aux = auxmask = Variable(torch.LongTensor([[]]))
+    input_ids_aux = Variable(torch.LongTensor([[]]))
     input_lines_tgt = output_lines_tgt = tgtmask = Variable(torch.LongTensor([[]]))
-    srclens = auxlens = tgtlens = indices = []
+    srclens = tgtlens = indices = []
 
     if CUDA:
         input_lines_src = input_lines_src.cuda()
@@ -590,6 +590,14 @@ def even_minibatch_sample(dataset, n_styles, batch_idx, sample_size, max_length,
         input_lines_tgt = input_lines_tgt.cuda()
         output_lines_tgt = output_lines_tgt.cuda()
         tgtmask = tgtmask.cuda()
+
+    # only create auxmask tensor if attributes are discrete tokens
+    if model_type == 'delete_retrieve':
+        auxmask = Variable(torch.LongTensor([[]]))
+        if CUDA:
+            auxmask = auxmask.cuda()
+    else:
+        auxmask = auxlens = None
     
     for i in range(n_styles):
         if is_bt:
@@ -610,15 +618,17 @@ def even_minibatch_sample(dataset, n_styles, batch_idx, sample_size, max_length,
         output_lines_src = torch.cat((output_lines_src, input_content[1]), dim=0)
         srcmask = torch.cat((srcmask, input_content[3]), dim=0)
         input_ids_aux = torch.cat((input_ids_aux, input_aux[0]), dim=0)
-        auxmask = torch.cat((auxmask, input_aux[3]), dim=0)
         input_lines_tgt = torch.cat((input_lines_tgt, output[0]), dim=0)
         output_lines_tgt = torch.cat((output_lines_tgt, output[1]), dim=0)
         tgtmask = torch.cat((tgtmask, output[3]), dim=0)
 
         srclens.append(input_content[2])
-        auxlens.append(input_aux[2])
         tgtlens.append(output[2])
         indices.append(input_content[4])
+
+        if model_type == 'delete':
+            auxmask = torch.cat((auxmask, input_aux[3]), dim=0)
+            auxlens.append(input_aux[2])
     
     src_packed = (input_lines_src, output_lines_src, srclens, srcmask, indices)
     auxs_packed = (input_ids_aux, _, auxlens, auxmask, _)
