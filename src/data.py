@@ -272,6 +272,7 @@ def get_tokenizer(encoder = 'gpt2',
             cache_dir = cache_dir,
             bos_token = start_token,
             eos_token = stop_token,
+            sep_token = stop_token # set sep token to prevent verbose warnings
             # pad_token = pad_token,
             # additional_special_tokens = [empty_token]
         )
@@ -393,7 +394,7 @@ def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
             try:
                 line = next( (
                     tgt_attr.split() for tgt_attr, _, _ in sims
-                    if set(tgt_attr.split()) != set(line[1:-1]) # and tgt_attr != ''   # TODO -- exclude blanks?
+                    if set(tgt_attr.split()) != set(line) # and tgt_attr != ''   # TODO -- exclude blanks?
                 ) )
             # all the matches are blanks
             except StopIteration:
@@ -440,7 +441,7 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
     ]
 
     mask = [
-        ([True] * l) + ([False] * (max_len - l))
+        ([False] * l) + ([True] * (max_len - l))
         for l in lens
     ]
 

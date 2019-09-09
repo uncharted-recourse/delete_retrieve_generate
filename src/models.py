@@ -207,7 +207,7 @@ class SeqModel(nn.Module):
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
         src_emb = self.src_embedding(input_src)
         #print(src_emb.size())
-        srcmask = (1-srcmask).byte()
+        #srcmask = (1-srcmask).byte()
 
         if self.options['encoder'] == 'lstm':
             src_outputs, (src_h_t, src_c_t) = self.encoder(src_emb, srclens, srcmask)
@@ -240,7 +240,7 @@ class SeqModel(nn.Module):
                 a_ht = torch.unsqueeze(a_ht, 1)
                 src_outputs = torch.cat((a_ht, src_outputs), 1)
                 src_outputs = self.ctx_bridge(src_outputs)
-                a_mask = Variable(torch.LongTensor([[0] for i in range(input_src.size(0))])).byte()
+                a_mask = Variable(torch.LongTensor([[False] for i in range(input_src.size(0))]))#.byte()
                 if CUDA:
                     a_mask = a_mask.cuda()
                 srcmask = torch.cat((a_mask, srcmask), dim = 1)
@@ -274,7 +274,7 @@ class SeqModel(nn.Module):
                 src_outputs,
                 srcmask)
         elif self.options['decoder'] == 'transformer':
-            tgtmask = (1-tgtmask).byte()
+            #tgtmask = (1-tgtmask).byte()
             tgt_outputs = self.decoder(
                 tgt_emb, 
                 src_outputs, 
