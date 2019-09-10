@@ -58,8 +58,9 @@ class LSTMEncoder(nn.Module):
         return outputs, (h_final, c_final)
 
 class TransformerEncoder(nn.Module):
-    """ simple wrapper for a transformer encoder """
+    """ simple wrapper for a pytorch transformer encoder """
     def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4):
+        r""" Encoder is a stack of N encoder layers"""
         super(TransformerEncoder, self).__init__()
 
         self.encoder_layer = nn.TransformerEncoderLayer(
@@ -75,6 +76,7 @@ class TransformerEncoder(nn.Module):
         )
 
     def forward(self, src_embedding, srcmask):
+        r""" Pass the inputs (and masks) through each encoder layer in turn"""
         return self.transformer_encoder.forward(
             src_embedding.transpose(0,1), 
             src_key_padding_mask = srcmask

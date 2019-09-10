@@ -128,12 +128,14 @@ class StackedAttentionLSTM(nn.Module):
         return input, (h_final, c_final)
 
 class TransformerDecoder(nn.Module):
-    """ simple wrapper for a transformer encoder """
+    r""" simple wrapper for a pytorch transformer encoder """
     def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4):
+        r""" Decoder is a stack of N decoder layers"""
         super(TransformerDecoder, self).__init__()
 
+        self.emb_dim = emb_dim
         self.decoder_layer = nn.TransformerDecoderLayer(
-            emb_dim, 
+            self.emb_dim, 
             n_head, 
             dim_feedforward = dim_ff, 
             dropout = dropout
@@ -145,13 +147,25 @@ class TransformerDecoder(nn.Module):
         )
 
     def forward(self, tgt_embedding, encoder_output, tgtmask, srcmask):
-        print(encoder_output.transpose(0,1).size())
-        print(srcmask.size())
+        r""" Pass the inputs (and masks) through each decoder layer in turn"""
+        # generate square padding masks so that only positions before i can influence attention op
+        src_position_mask = self.generate_square_subsequent_mask(encoder_output.size(1))
+        tgt_position_mask = self.generate_square_subsequent_mask(self.emb_dim)
+
         return self.transformer_decoder.forward(
             tgt_embedding.transpose(0,1), 
             encoder_output.transpose(0,1), 
             tgt_key_padding_mask = tgtmask, 
-            memory_key_padding_mask = srcmask
+            memory_key_padding_mask = srcmask,
+            tgt_mask = tgt_position_mask,
+            memory_mask = tgt_position_mask
         ).transpose(0,1)
 
+    def generate_square_subsequent_mask(self, sz):
+        r"""Generate a square mask for the sequence. The masked positions are filled with float('-inf').
+            Unmasked positions are filled with float(0.0). Copied from torch Transformer base class. 
+        """
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
 

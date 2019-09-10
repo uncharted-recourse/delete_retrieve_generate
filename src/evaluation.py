@@ -6,6 +6,7 @@ from typing import List
 import torch
 from torch.autograd import Variable
 import torch.nn as nn
+import torch.optim as optim
 import editdistance
 import heapq
 from src import data
@@ -70,9 +71,78 @@ def get_edit_distance(hypotheses, reference):
 
     return ed * 1.0 / len(hypotheses)
 
+def backpropagation_step(loss, optimizer):
+    """ perform one step of backpropagation"""
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
+    """ define optimmizer and scheduler according to learning rate"""
+
+    if optimizer_type == 'adam':
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    elif optimizer_type == 'sgd':
+        optimizer = optim.SGD(model.parameters(), lr=lr)
+    else:
+        raise NotImplementedError("Learning method not recommended for this task")
+
+    # reduce learning rate by a factor of 10 after plateau of 10 epochs
+    if scheduler_type == 'plateau':
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
+    elif scheduler_type == 'cyclic':
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
+            base_lr = lr,  
+            max_lr = 10 * lr
+        )
+    else:
+        raise NotImplementedError("Learning scheduler not recommended for this task")
+    return optimizer, scheduler
+
+def calculate_discriminator_loss(content_data, attr_data, tgt_data, tokenizer, model, z_discriminator,
+                                s_discriminators, config, encoder_state, decoder_states, sample_size):
+    """ calculate discriminator loss over encoder states and tf decoder states vs. soft decoder states"""
+
+    # generate sequences to compare to teacher-forced outputs from above
+    _, soft_decoder_states = generate_sequences(
+        tokenizer,
+        model, 
+        config,
+        data.get_start_id(tokenizer),
+        data.get_stop_id(tokenizer),
+        content_data,
+        attr_data,
+        tgt_data
+    )
+
+    # truncate decoder_states to match seq. length of decoder_states from teacher-forced generation
+    soft_decoder_states = soft_decoder_states[:, decoder_states.size(1), :]
+
+    # pass encoder states and decoder states to discriminator module
+    z_output = z_discriminator(encoder_state)
+    s_outputs = []
+    for i in range(len(s_discriminators) + 1):
+        decoder_states = decoder_states[i * sample_size:(i+1) * sample_size]
+        soft_decoder_states = soft_decoder_states[i * sample_size:(i+1) * sample_size]
+        s_outputs.append(s_discriminators[i].forward(torch.cat((decoder_states, soft_decoder_states), dim=0)))
+
+    # calculate cross entropy loss over discriminators
+    # for now use input_ids_aux as style labels (D model), would need to update for D+R model
+    loss_criterion_d = nn.CrossEntropyLoss()
+    # tf decoder states get label 1, soft decoder states get label 0
+    decoder_labels = torch.cat((torch.ones(sample_size, 1), torch.ones(sample_size, 0)))
+    if CUDA:
+        loss_criterion_d = loss_criterion_d.cuda()
+        decoder_labels = decoder_labels.cuda()
+    z_loss = loss_criterion_d(z_output, input_ids_aux)
+    s_losses = [loss_criterion_d(style_output, decoder_labels) for style_output in s_outputs]
+
+    return d_loss, s_losses
+
 def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length, model_type, model, 
-                    loss_crit = 'cross_entropy', bt_ratio = 1, is_test = False):
-    
+                    z_discriminator, s_discriminators, loss_crit = 'cross_entropy', bt_ratio = 1, is_test = False):
+    """ sample minibatch, pass minibatch through model, calculate loss and entropy according to config"""
+
     # sample even number of samples from each corpus according to batch size, 
     src_packed, auxs_packed, tgt_packed = data.minibatch(dataset, batch_idx, 
         sample_size, max_length, model_type, is_test = is_test)
@@ -80,15 +150,16 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
     input_ids_aux, _, auxlens, auxmask, _ = auxs_packed
     input_lines_tgt, output_lines_tgt, tgtlens, tgtmask, _ = tgt_packed
 
-    decoder_logit, decoder_probs = model(
+    decoder_logit, decoder_probs, encoder_state, decoder_states = model(
         input_lines_src, input_lines_tgt, srcmask, srclens,
         input_ids_aux, auxlens, auxmask, tgtmask)
     
     # calculate loss on two minibatches separately, weight losses w/ ratio
-    weight_mask = torch.ones(len(dataset[0]['tokenizer']))
+    tokenizer = dataset[0]['tokenizer']
+    weight_mask = torch.ones(len(tokenizer))
     if CUDA:
         weight_mask = weight_mask.cuda()
-    padding_id = data.get_padding_id(dataset[0]['tokenizer'])
+    padding_id = data.get_padding_id(tokenizer)
     weight_mask[padding_id] = 0
     
     # define loss criterion
@@ -102,7 +173,7 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
     # calculate loss 
     if loss_crit == 'cross_entropy':
         loss = loss_criterion(
-            decoder_logit.contiguous().view(-1, len(dataset[0]['tokenizer'])),
+            decoder_logit.contiguous().view(-1, len(tokenizer)),
             output_lines_tgt.view(-1)
         )
     else:
@@ -115,6 +186,17 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
     # mean entropy
     mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
 
+    # calculate discriminator loss if doing adversarial training
+    if z_discriminator is not None:
+        z_loss, s_losses = calculate_discriminator_loss(src_packed, auxs_packed, tgt_packed, tokenizer, 
+                model, z_discriminator, s_discriminators, config, encoder_state, decoder_states, sample_size)
+        d_loss_total = z_loss
+        for s_loss in s_losses:
+            d_loss_total += s_loss
+        loss = loss - config['training']['discriminator_ratio'] * d_loss_total
+    else: 
+        z_loss = s_losses = None
+
     # get backtranslation minibatch (BT should be turned off for evaluation)
     if bt_ratio > 0 and not is_test:
 
@@ -124,20 +206,31 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
         bt_input_ids_aux, _, bt_auxlens, bt_auxmask, _ = auxs_packed
         bt_input_lines_tgt, bt_output_lines_tgt, bt_tgtlens, bt_tgtmask, _ = tgt_packed
 
-        bt_decoder_logit, bt_decoder_probs = model(
+        bt_decoder_logit, bt_decoder_probs, bt_encoder_state, bt_decoder_states = model(
             bt_input_lines_src, bt_input_lines_tgt, bt_srcmask, bt_srclens,
             bt_input_ids_aux, bt_auxlens, bt_auxmask, bt_tgtmask)
         
         # calculate loss
         if loss_crit == 'cross_entropy':
             bt_loss = loss_criterion(
-                bt_decoder_logit.contiguous().view(-1, len(dataset[0]['tokenizer'])),
+                bt_decoder_logit.contiguous().view(-1, len(tokenizer)),
                 bt_output_lines_tgt.view(-1)
             )
         else:
             bt_loss = expected_bleu(bt_decoder_probs, bt_output_lines_tgt.cpu(), 
                 torch.LongTensor([bt_decoder_logit.size()[1]] * sample_size * n_styles),
                 bt_tgtlens, smooth=True)[0]
+
+        # calculate discriminator loss if doing adversarial training
+        if z_discriminator is not None:
+            bt_z_loss, bt_s_losses = calculate_discriminator_loss(src_packed, auxs_packed, tgt_packed, tokenizer, 
+                    model, z_discriminator, s_discriminators, config, bt_encoder_state, bt_decoder_states, sample_size)
+            z_loss = (bt_ratio * bt_d_loss + z_loss) / 2
+            s_losses = [(bt_ratio * bt_s_loss + s_loss) / 2 for bt_s_loss, s_loss in zip(bt_s_losses, s_losses)]
+            bt_d_loss_total += bt_z_loss
+            for s_loss in bt_s_losses:
+                bt_d_loss_total += s_loss
+            bt_loss = bt_loss - config['training']['discriminator_ratio'] * bt_d_loss_total
 
         # combine losses
         loss = (bt_ratio * bt_loss + loss) / 2
@@ -146,12 +239,13 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
         bt_mean_entropy = mean_masked_entropy(bt_decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
         mean_entropy = (bt_ratio * bt_mean_entropy + mean_entropy) / 2
  
-    # return combined loss and combined mean entropy
-    return loss, mean_entropy
+    # return combined loss, discrim loss, and combined mean entropy  
+    return loss, z_loss, s_losses, mean_entropy
 
 def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclens, srcmask,
         aux_input, auxlens, auxmask):
     """ argmax decoding """
+
     # Initialize target with start_id for every sentence
     tgt_input = Variable(torch.LongTensor(
         [
@@ -172,8 +266,8 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
 
     for i in range(max_len):
         # run input through the model
-        decoder_logit, word_probs = model(src_input, tgt_input, srcmask, srclens,
-            aux_input, auxmask, auxlens, tgt_mask)
+        decoder_logit, word_probs, _, decoder_states = model(src_input, tgt_input, 
+            srcmask, srclens, aux_input, auxmask, auxlens, tgt_mask)
         decoder_argmax = word_probs.data.cpu().numpy()[:,-1,:].argmax(axis=-1)
         
         # select the predicted "next" tokens, attach to target-side inputs
@@ -188,10 +282,12 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
         tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
 
-    return tgt_input
+    # return last value of encoder_state (always the same) and decoder_states (argmax sampling)
+    return tgt_input, decoder_states
 
-# convert seqs to tokens
 def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
+    """ convert seqs to tokens"""
+
     # take off the gpu
     tok_seqs = tok_seqs.cpu().numpy()
     # convert to toks, delete any special tokens (bos, eos, pad)
@@ -208,6 +304,8 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
          return tok_seqs
 
 def generate_sequences(tokenizer, model, config, start_id, stop_id, input_content, input_aux, output):
+    "generate sequences of output by sampling from token distribution according to decoding strategy"
+    
     input_lines_src, output_lines_src, srclens, srcmask, indices = input_content
     input_ids_aux, _, auxlens, auxmask, _ = input_aux
     input_lines_tgt, output_lines_tgt, _, _, _ = output
@@ -215,32 +313,32 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
     # decode dataset with greedy, beam search, or top k
     start_time = time.time()
     if config['model']['decode'] == 'greedy':
-        tgt_pred = decode_minibatch_greedy(
+        tgt_pred, decoder_states = decode_minibatch_greedy(
             config['data']['max_len'], start_id, stop_id, 
             model, input_lines_src, srclens, srcmask,
             input_ids_aux, auxlens, auxmask)
         log(f'greedy search decoding took: {time.time() - start_time}', level='debug')
-    elif config['model']['decode'] == 'beam_search':
-        start_time = time.time()
-        if config['model']['model_type'] == 'delete_retrieve':
-            tgt_pred = torch.stack([beam_search_decode(
-                config['data']['max_len'], start_id, stop_id, model, 
-                i, [i_l], i_m, a, [a_l], a_m,
-                data.get_padding_id(tokenizer), config['model']['beam_width']) for 
-                i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
-                input_ids_aux, auxlens, auxmask)])
-        elif config['model']['model_type'] == 'delete':
-            input_ids_aux = input_ids_aux.unsqueeze(1)
-            tgt_pred = torch.stack([beam_search_decode(
-                config['data']['max_len'], start_id, stop_id, model, 
-                i, [i_l], i_m, a, None, None,
-                data.get_padding_id(tokenizer), config['model']['beam_width']) for 
-                i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
-                input_ids_aux)])
-        log(f'beam search decoding took: {time.time() - start_time}', level='debug')
+    # elif config['model']['decode'] == 'beam_search':
+    #     start_time = time.time()
+    #     if config['model']['model_type'] == 'delete_retrieve':
+    #         tgt_pred = torch.stack([beam_search_decode(
+    #             config['data']['max_len'], start_id, stop_id, model, 
+    #             i, [i_l], i_m, a, [a_l], a_m,
+    #             data.get_padding_id(tokenizer), config['model']['beam_width']) for 
+    #             i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
+    #             input_ids_aux, auxlens, auxmask)])
+    #     elif config['model']['model_type'] == 'delete':
+    #         input_ids_aux = input_ids_aux.unsqueeze(1)
+    #         tgt_pred = torch.stack([beam_search_decode(
+    #             config['data']['max_len'], start_id, stop_id, model, 
+    #             i, [i_l], i_m, a, None, None,
+    #             data.get_padding_id(tokenizer), config['model']['beam_width']) for 
+    #             i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
+    #             input_ids_aux)])
+    #     log(f'beam search decoding took: {time.time() - start_time}', level='debug')
     elif config['model']['decode'] == 'top_k':
         start_time = time.time()
-        tgt_pred = decode_top_k(
+        tgt_pred, decoder_states = decode_top_k(
             config['data']['max_len'], start_id, stop_id,
             model, input_lines_src, srclens, srcmask,
             input_ids_aux, auxlens, auxmask, 
@@ -248,12 +346,13 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
         )
         log(f'top k decoding took: {time.time() - start_time}', level='debug')
     else:
-        raise Exception('Decoding method must be one of greedy, beam_search, top_k')
+        raise Exception('Decoding method must be one of greedy or top_k')
 
-    return tgt_pred
+    return tgt_pred, decoder_states
 
 def decode_dataset(model, test_data, sample_size, num_samples, config):
-    """Evaluate model."""
+    """Evaluate model on num_samples of size sample_size"""
+
     inputs = []
     preds = []
     auxs = []
@@ -272,7 +371,7 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
 
         # generate sequences according to decoding strategy
         tokenizer = test_data[0]['tokenizer']
-        tgt_pred = generate_sequences(
+        tgt_pred, _ = generate_sequences(
             tokenizer,
             model, 
             config,
@@ -318,6 +417,7 @@ def evaluate_lpp(model, test_data, sample_size, config):
         (i.e., with teacher forcing)
     """
     losses = []
+    d_losses = [[]]
     content_lengths = [len(datum['content']) for datum in test_data]
     min_content_length = min(content_lengths)
     for j in range(0, min_content_length, sample_size):
@@ -325,16 +425,19 @@ def evaluate_lpp(model, test_data, sample_size, config):
         sys.stdout.flush()
 
         loss_crit = config['training']['loss_criterion']
-        combined_loss, combined_mean_entropy = calculate_loss(test_data, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
+        combined_loss, z_loss, s_loss, combined_mean_entropy = calculate_loss(test_data, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
             config['model']['model_type'], model, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test=True)
 
         loss_item = combined_loss.item() if loss_crit == 'cross_entropy' else -combined_loss.item()
+    
         losses.append(loss_item)
-
-    return np.mean(losses), combined_mean_entropy
+        d_losses[0].append(z_loss.item())
+        for d_loss, s_l in zip(d_losses[1:], s_loss):
+            d_loss.append(s_l)
+    return np.mean(losses), [np.mean(d_loss) for d_loss in d_losses], combined_mean_entropy
 
 def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True, remove_attributes = True):
-
+    
     start_time = time.time()
 
     # tokenize input data using cached tokenizer and attribute vocab
@@ -438,13 +541,16 @@ def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True
     return ' '.join(preds[0])
 
 def sample_softmax(logits, temperature=1.0, num_samples=1):
+    """ sample from softmax distribution over tokens with temperature"""
+
     exps = np.exp((logits - np.max(logits)) / temperature)
     probs = exps / np.sum(exps)
     return np.random.choice(logits.shape[0], p = probs)
 
 def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen, 
                         aux_input, auxmask, auxlen):
-    
+    """ get next token logit probabilities"""
+
     # get tensors in correct shape for prediction
     src_input = src_input.unsqueeze(0)
     srcmask = srcmask.unsqueeze(0)
@@ -452,7 +558,7 @@ def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen,
         auxmask = auxmask.unsqueeze(0)
     if CUDA:
         tgt_input = tgt_input.cuda()
-    decoder_logit, word_probs = model(src_input, tgt_input, srcmask, srclen,
+    decoder_logit, word_probs, _, _ = model(src_input, tgt_input, srcmask, srclen,
         aux_input, auxmask, auxlen)
     return decoder_logit.data.cpu().numpy()[0, -1, :]
 
@@ -470,6 +576,7 @@ def decode_top_k(
     k = 10,
     temperature=1.0
 ):
+    """ perform top k decoding according to k and temperature params"""
 
     # Initialize target with start_id for every sentence
     tgt_input = Variable(torch.LongTensor(
@@ -491,7 +598,7 @@ def decode_top_k(
 
     for i in range(max_len):
         # run input through the model
-        decoder_logits, _ = model(src_input, tgt_input, srcmask, srclens,
+        decoder_logits, _, _, decoder_states = model(src_input, tgt_input, srcmask, srclens,
             aux_input, auxmask, auxlens, tgt_mask)
         decoder_logits = decoder_logits.data.cpu().numpy()[:,-1,:]
 
@@ -515,9 +622,13 @@ def decode_top_k(
             next_mask = next_mask.cuda()
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
         tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
-    return tgt_input
+
+    # return last value of encoder_state (always the same) and decoder_states (top_k sampling)
+    return tgt_input, decoder_states
 
 class Beam(object):
+    """ Beam object for beam search decoding"""
+
     def __init__(self, beam_width):
         self.heap = list()
         self.beam_width = beam_width

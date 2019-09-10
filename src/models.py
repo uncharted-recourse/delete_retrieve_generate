@@ -213,17 +213,17 @@ class SeqModel(nn.Module):
             src_outputs, (src_h_t, src_c_t) = self.encoder(src_emb, srclens, srcmask)
             
             if self.options['bidirectional']:
-                h_t = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
-                c_t = torch.cat((src_c_t[-1], src_c_t[-2]), 1)
+                h_t_encoder = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
+                c_t_encoder = torch.cat((src_c_t[-1], src_c_t[-2]), 1)
             else:
-                h_t = src_h_t[-1]
-                c_t = src_c_t[-1]
+                h_t_encoder = src_h_t[-1]
+                c_t_encoder = src_c_t[-1]
             src_outputs = self.ctx_bridge(src_outputs)
 
         elif self.options['encoder'] == 'transformer':
-            src_outputs = self.encoder(src_emb, srcmask)
-            h_t = None
-            c_t = None
+            src_outputs_encoder = self.encoder(src_emb, srcmask)
+            h_t_encoder = None
+            c_t_encoder = None
         # # # #  # # # #  # #  # # # # # # #  # # seq2seq diff
         # join attribute with h/c then bridge 'em
         # TODO -- put this stuff in a method, overlaps w/above
@@ -232,13 +232,13 @@ class SeqModel(nn.Module):
             # just do h i guess?x
             a_ht = self.attribute_embedding(input_attr)
             if self.options['encoder'] == 'lstm':
-                c_t = torch.cat((c_t, a_ht), -1)
+                c_t = torch.cat((c_t_encoder, a_ht), -1)
                 c_t = self.c_bridge(c_t)
-                h_t = torch.cat((h_t, a_ht), -1)
+                h_t = torch.cat((h_t_encoder, a_ht), -1)
                 h_t = self.h_bridge(h_t)
             elif self.options['encoder'] == 'transformer':
                 a_ht = torch.unsqueeze(a_ht, 1)
-                src_outputs = torch.cat((a_ht, src_outputs), 1)
+                src_outputs = torch.cat((a_ht, src_outputs_encoder), 1)
                 src_outputs = self.ctx_bridge(src_outputs)
                 a_mask = Variable(torch.LongTensor([[False] for i in range(input_src.size(0))]))#.byte()
                 if CUDA:
@@ -255,20 +255,20 @@ class SeqModel(nn.Module):
                 else:
                     a_ht = a_ht[-1]
                     a_ct = a_ct[-1]
-                c_t = torch.cat((c_t, a_ct), -1)
+                c_t = torch.cat((c_t_encoder, a_ct), -1)
                 c_t = self.c_bridge(c_t)
-                h_t = torch.cat((h_t, a_ht), -1)
+                h_t = torch.cat((h_t_encoder, a_ht), -1)
                 h_t = self.h_bridge(h_t)
 
             elif self.options['encoder'] == 'transformer':
                 a_ht = self.attribute_encoder(attr_emb, attrmask)
-                src_outputs = torch.cat((a_ht, src_outputs), -1)
+                src_outputs = torch.cat((a_ht, src_outputs_encoder), -1)
                 src_outputs = self.ctx_bridge(src_outputs)
 
         # # # #  # # # #  # #  # # # # # # #  # # end diff
         tgt_emb = self.tgt_embedding(input_tgt)
         if self.options['decoder'] == 'lstm':
-            tgt_outputs, (_, _) = self.decoder(
+            tgt_outputs, (tgt_h_t, tgt_c_t) = self.decoder(
                 tgt_emb,
                 (h_t, c_t),
                 src_outputs,
@@ -296,7 +296,13 @@ class SeqModel(nn.Module):
 
         probs = self.softmax(decoder_logit)
 
-        return decoder_logit, probs
+        # in adversarial paradigm, also return 
+        #   a. final hidden state of encoder (lstm) / encoder output (transformer)
+        #   b. hidden states of decoder (lstm) / decoder output (transformer)
+        if self.options['encoder'] == 'lstm':
+            return decoder_logit, probs, src_h_t[-1], tgt_h_t
+        elif self.options['encoder'] == 'transformer':
+            return decoder_logit, probs, src_outputs_encoder, tgt_outputs
 
     # returns trainable params, untrainable params
     def count_params(self):

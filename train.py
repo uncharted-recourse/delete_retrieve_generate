@@ -18,6 +18,7 @@ import src.evaluation as evaluation
 from src.cuda import CUDA
 import src.data as data
 import src.models as models
+import src.discriminators as discriminators
 import random
 
 
@@ -120,26 +121,19 @@ if CUDA:
     model = model.cuda()
 
 # define learning rate and scheduler
-if config['training']['optimizer'] == 'adam':
-    lr = config['training']['learning_rate']
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-elif config['training']['optimizer'] == 'sgd':
-    lr = config['training']['learning_rate']
-    optimizer = optim.SGD(model.parameters(), lr=lr)
-else:
-    raise NotImplementedError("Learning method not recommended for this task")
+optimizer, scheduler = evaluation.define_optimizer_and_scheduler(config['training']['learning_rate'], 
+    config['training']['optimizer'], config['training']['scheduler'], model)
 
-scheduler_name = config['training']['scheduler']
-# reduce learning rate by a factor of 10 after plateau of 10 epochs
-if scheduler_name == 'plateau':
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
-elif scheduler_name == 'cyclic':
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
-        base_lr = lr,  
-        max_lr = 10 * lr
-    )
+# define discriminator model, optimizers, and schedulers if adverarial paradigm
+if config['training']['discriminator_ratio'] > 0:
+    z_discriminator, s_discriminators, d_optimizers, d_schedulers = discriminators.define_discriminators(
+        n_styles,
+        working_dir, 
+        config['training']['discriminator_learning_rate'],
+        config['training']['optimizer'], 
+        config['training']['scheduler'])
 else:
-    raise NotImplementedError("Learning scheduler not recommended for this task")
+    z_discriminator = s_discriminators = None
 
 # main training loop
 epoch_loss = []
@@ -175,23 +169,29 @@ for epoch in range(start_epoch, config['training']['epochs']):
         batch_idx = i / sample_size
 
         # calculate loss
-        optimizer.zero_grad()
         loss_crit = config['training']['loss_criterion']
-        train_loss, _ = evaluation.calculate_loss(train_data, n_styles, config, i, sample_size, max_length, 
-            config['model']['model_type'], model, loss_crit, bt_ratio = config['training']['bt_ratio'])
+        train_loss, z_loss, s_losses, _ = evaluation.calculate_loss(train_data, n_styles, config, i, sample_size, max_length, 
+            config['model']['model_type'], model, z_discriminator, s_discriminators, loss_crit, bt_ratio = config['training']['bt_ratio'])
         loss_item = train_loss.item() if loss_crit == 'cross_entropy' else -train_loss.item()
         losses.append(loss_item)
         losses_since_last_report.append(loss_item)
         epoch_loss.append(loss_item)
-        train_loss.backward()
+        evaluation.backpropagation_step(train_loss, optimizer)
+
+        # update discriminator optimizer and schedulers
+        if z_discriminator is not None:
+            losses = [z_loss] + s_losses
+            [evaluation.backpropagation_step(l, opt) for l, opt in zip(losses, d_optimizers)]
+            if scheduler_name == 'cyclic':
+                [d_scheduler.step() for scheduler in d_schedulers]
 
         # write information to tensorboard
         norm = nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_norm'])
         writer.add_scalar('stats/grad_norm', norm, STEP)
-        optimizer.step()
 
         if scheduler_name == 'cyclic':
             writer.add_scalar('stats/lr', scheduler.get_lr(), STEP)
+            scheduler.step()
 
         if args.overfit or batch_idx % config['training']['batches_per_report'] == 0:
 
@@ -216,7 +216,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
     # evaluate on dev set, update scheduler
     start = time.time()
     model.eval()
-    dev_loss, mean_entropy = evaluation.evaluate_lpp(
+    dev_loss, d_dev_losses, mean_entropy = evaluation.evaluate_lpp(
             model, test_data, sample_size, config)
 
     writer.add_scalar('eval/loss', dev_loss, epoch)
@@ -225,6 +225,9 @@ for epoch in range(start_epoch, config['training']['epochs']):
         for param_group in optimizer.param_groups:
             writer.add_scalar('stats/lr', param_group['lr'], epoch)
         scheduler.step(dev_loss)
+
+        if z_discriminator is not None:
+            [d_scheduler.step(d_loss) for d_scheduler, d_loss in zip(d_schedulers, d_dev_losses)]
 
     # write predictions and ground truths to checkpoint dir
     if args.bleu and epoch >= config['training'].get('inference_start_epoch', 1):
