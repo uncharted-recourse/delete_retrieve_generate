@@ -71,12 +71,19 @@ class ConvNet(nn.Module):
 
 def define_discriminators(n_styles, working_dir, lr, optimizer_type, scheduler_type):
     """ Defines z and style discriminators, optimizers, and schedulers"""
+
+    # z discriminator discriminates between z encoder final hidden state (lstm) 
+    # or encoder output (transformer) from n styles
     z_discriminator = ConvNet(
         n_styles = n_styles,
         num_channels = [2,4], 
         kernel_sizes = [5,5], 
         conv_dim = 1
         )
+
+    # style disciminators discriminate between hidden states (lstm) or output state
+    # (transformer) from generated example and hidden states (lstm) or output state
+    # (transformer) from teacher-forced example, for each style separately
     s_discriminators = [ConvNet(2, 
         num_channels = [2,4], 
         kernel_sizes_s = [5,5], 
@@ -112,74 +119,6 @@ def define_discriminators(n_styles, working_dir, lr, optimizer_type, scheduler_t
     
     return z_discriminator, s_discriminators, d_optimizers, d_schedulers
     
-class Discriminator(nn.Module):
-    """ discriminates between encoder final hidden state / output state, and, for each style, 
-        between decoder hidden states / decoder output 
-
-        n_styles = number of different styles for discriminator to discriminate against
-        num_channels_z = list of output channels for each conv layer in z discriminator
-        kernel_sizes_z = list of kernel sizes for each conv layer in z discriminator
-        num_channels_s = list of output channels for each conv layer in style discriminator
-        kernel_sizes_s = list of kernel sizes for each conv layer in style discriminator
-    """
-
-    def __init__(self, n_styles, num_channels_z, kernel_sizes_z, num_channels_s = None, kernel_sizes_s = None):
-        super(Discriminator, self).__init__()
-
-        if num_channels_s is None:
-            num_channels_s = num_channels_z
-        if kernel_sizes_s is None:
-            kernel_sizes_s = kernel_sizes_z
-        self.n_styles = n_styles
-
-        # z discriminator discriminates between z encoder final hidden state (lstm) 
-        # or encoder output (transformer) from n styles
-        self.z_discriminator = ConvNet(n_styles, 
-            num_channels_z, 
-            kernel_sizes_z, 
-            1
-        )
-
-        # style disciminators discriminate between hidden states (lstm) or output state
-        # (transformer) from generated example and hidden states (lstm) or output state
-        # (transformer) from teacher-forced example, for each style separately
-        self.style_discriminators = [ConvNet(2, 
-            num_channels_s, 
-            kernel_sizes_s, 
-            2 
-        ) for i in range(0, n_styles)]
-
-    def forward(self, encoder_outputs, tf_decoder_states, soft_decoder_states):
-        """ encoder_outputs = encoder outputs
-            tf_decoder_states: unrolled decoder hidden states from D(z, s_i) with x_i (real)
-            soft_decoder_states: unrolled decoder hidden states from D(z, s_j) (fake) 
-            """
-
-        z_output = self.z_discriminator.forward(encoder_output)
-
-        # split decoder states according to n_styles
-        style_batch_size = (tf_decoder_states.size(0) // self.n_styles)
-        
-        # pass tf_decoder_states and soft_decoder_states to each style discriminator
-        s_outputs = []
-        for i in n_styles:
-            tf_states = tf_decoder_states[i * style_batch_size:(i+1) * style_batch_size]
-            soft_states = soft_decoder_states[i * style_batch_size:(i+1) * style_batch_size]
-            s_outputs.append(self.style_discriminators[i].forward(torch.cat((tf_states, soft_states), dim=0)))
-
-        return z_output, s_outputs
-    
-    # returns trainable params, untrainable params
-    def count_params(self):
-        n_trainable_params = 0
-        n_untrainable_params = 0
-        for param in self.parameters():
-            if param.requires_grad:
-                n_trainable_params += np.prod(param.data.cpu().numpy().shape)
-            else:
-                n_untrainable_params += np.prod(param.data.cpu().numpy().shape)
-        return n_trainable_params, n_untrainable_params
-
 # LM Discrim
 
 # Step 1: NLLL of L_lm_x and L_lm_y
