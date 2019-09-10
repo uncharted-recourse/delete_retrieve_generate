@@ -220,7 +220,7 @@ def calculate_ngram_attribute_vocab(input_lines, salience_threshold, ngram_range
                 attrs[salience_index][gram] = max_sal
         return attrs
 
-    prepped_corpii = [[' '.join(line) for line in corpus] for corpus in corpii]
+    prepped_corpii = [[' '.join(line) for line in corpus] for corpus in input_lines]
     sc = SalienceCalculator(prepped_corpii, tokenize)
     return calculate_attribute_markers(prepped_corpii)
 
@@ -415,7 +415,7 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
     # FORCE NO SORTING because we care about the order of outputs
     #   to compare across systems
 
-    lines = [line[:max_len] for line in lines[index:index + batch_size] for lines in lines_even]
+    lines = [line[:max_len] for lines in lines_even for line in lines[index:index + batch_size]]
     lens = [len(line) - 1 for line in lines]
     if dist_measurer is not None:
         lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
@@ -457,7 +457,7 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
 
     input_lines = Variable(torch.LongTensor(input_lines))
     output_lines = Variable(torch.LongTensor(output_lines))
-    mask = Variable(torch.FloatTensor(mask))
+    mask = Variable(torch.BoolTensor(mask))
 
     if CUDA:
         input_lines = input_lines.cuda()
@@ -530,7 +530,8 @@ def minibatch(datasets, idx, batch_size, max_len, model_type, is_bt = False, is_
     # datasets is a list of datasets (one of each style) 
     # bt_orig_datasets - original datasets before backtranslation (tgt datasets)
 
-    # order lists of input / output datasets depending on whether train, test, BT    n_styles = len(datasets)
+    # order lists of input / output datasets depending on whether train, test, BT    
+    n_styles = len(datasets)
     if bt_orig_datasets is None:
         out_dataset_ordering = []
         out_datasets = datasets
@@ -558,7 +559,6 @@ def minibatch(datasets, idx, batch_size, max_len, model_type, is_bt = False, is_
     out_attributes = [out_datasets[i]['attribute'] for i in out_dataset_ordering]
     out_dist_measurers = [out_datasets[i]['dist_measurer'] for i in out_dataset_ordering]
     tokenizer = datasets[0]['tokenizer']
-
     if model_type == 'delete':
         inputs = get_minibatch(
             in_content, tokenizer, input_idx, batch_size, max_len, sort=True)
@@ -568,6 +568,7 @@ def minibatch(datasets, idx, batch_size, max_len, model_type, is_bt = False, is_
         # true length could be less than batch_size at edge of data
         batch_len = len(outputs[0]) // n_styles
         attribute_ids = [[attribute_id] * batch_len for attribute_id in out_dataset_ordering]
+        attribute_ids = [attr_id for id_list in attribute_ids for attr_id in id_list]
         attribute_ids = Variable(torch.LongTensor(attribute_ids))
         if CUDA:
             attribute_ids = attribute_ids.cuda()
