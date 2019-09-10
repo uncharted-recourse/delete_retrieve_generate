@@ -366,9 +366,12 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
         sys.stdout.flush()
 
         # get batch
-        src_packed, auxs_packed, tgt_packed = data.even_minibatch_sample(dataset, n_styles, batch_idx, 
-            sample_size, max_length, model_type, is_test = True)
-
+        src_packed, auxs_packed, tgt_packed = data.minibatch(test_data, j, 
+            sample_size, config['data']['max_len'], config['model']['model_type'], is_test = True)
+        _, output_lines_src, _, _, indices = src_packed
+        input_ids_aux, _, _, _, _ = auxs_packed
+        _, output_lines_tgt, _, _, _ = tgt_packed
+        
         # generate sequences according to decoding strategy
         tokenizer = test_data[0]['tokenizer']
         tgt_pred, _ = generate_sequences(
@@ -421,7 +424,7 @@ def evaluate_lpp(model, test_data, sample_size, config):
     content_lengths = [len(datum['content']) for datum in test_data]
     min_content_length = min(content_lengths)
     for j in range(0, min_content_length, sample_size):
-        sys.stdout.write("\r%s/%s..." % (j, len(src['data'])))
+        sys.stdout.write("\r%s/%s..." % (j, min_content_length))
         sys.stdout.flush()
 
         loss_crit = config['training']['loss_criterion']
