@@ -1,7 +1,6 @@
 
 import torch.nn as nn
 from pytorch_transformers import OpenAIGPTLMHeadModel, GPT2LMHeadModel#, XLNetLMHeadModel, TransfoXLLMHeadModel
-import src.models as models
 import torch.optim as optim
 
 # L_z - aligns latent state z 
@@ -95,7 +94,7 @@ def define_discriminators(n_styles, working_dir, lr, optimizer_type, scheduler_t
         checkpoint_dir=working_dir)
     s_discriminators = [models.attempt_load_model(
         model=s_discriminator,
-        checkpoint_dir=working_dir) for s_discriminator in s_discriminators][0]]
+        checkpoint_dir=working_dir)[0] for s_discriminator in s_discriminators]
     if CUDA:
         z_discriminator = z_discriminator.cuda()
         s_discriminators = [s_discriminator.cuda() for s_discriminator in s_discriminators]

@@ -81,7 +81,7 @@ def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
     """ define optimmizer and scheduler according to learning rate"""
 
     if optimizer_type == 'adam':
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+        optimizer = optim.Adam(model.parameters(), lr=lr)
     elif optimizer_type == 'sgd':
         optimizer = optim.SGD(model.parameters(), lr=lr)
     else:
@@ -415,7 +415,7 @@ def inference_metrics(model, test_data, sample_size, num_samples, config):
     return bleu, edit_distance, inputs, preds, ground_truths, auxs
 
 
-def evaluate_lpp(model, test_data, sample_size, config):
+def evaluate_lpp(model, z_discriminator, s_discriminators, test_data, sample_size, config):
     """ evaluate log perplexity WITHOUT decoding
         (i.e., with teacher forcing)
     """
@@ -429,15 +429,19 @@ def evaluate_lpp(model, test_data, sample_size, config):
 
         loss_crit = config['training']['loss_criterion']
         combined_loss, z_loss, s_loss, combined_mean_entropy = calculate_loss(test_data, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
-            config['model']['model_type'], model, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test=True)
+            config['model']['model_type'], model, z_discriminator, s_discriminators, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test=True)
 
         loss_item = combined_loss.item() if loss_crit == 'cross_entropy' else -combined_loss.item()
-    
         losses.append(loss_item)
-        d_losses[0].append(z_loss.item())
-        for d_loss, s_l in zip(d_losses[1:], s_loss):
-            d_loss.append(s_l)
-    return np.mean(losses), [np.mean(d_loss) for d_loss in d_losses], combined_mean_entropy
+
+        if z_loss is not None: 
+            d_losses[0].append(z_loss.item())
+            for d_loss, s_l in zip(d_losses[1:], s_loss):
+                d_loss.append(s_l)
+            d_means = [np.mean(d_loss) for d_loss in d_losses]
+        else:
+            d_means = None
+    return np.mean(losses), d_means, combined_mean_entropy
 
 def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True, remove_attributes = True):
     

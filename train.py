@@ -121,8 +121,9 @@ if CUDA:
     model = model.cuda()
 
 # define learning rate and scheduler
+scheduler_name = config['training']['scheduler']
 optimizer, scheduler = evaluation.define_optimizer_and_scheduler(config['training']['learning_rate'], 
-    config['training']['optimizer'], config['training']['scheduler'], model)
+    config['training']['optimizer'], scheduler_name, model)
 
 # define discriminator model, optimizers, and schedulers if adverarial paradigm
 if config['training']['discriminator_ratio'] > 0:
@@ -131,7 +132,7 @@ if config['training']['discriminator_ratio'] > 0:
         working_dir, 
         config['training']['discriminator_learning_rate'],
         config['training']['optimizer'], 
-        config['training']['scheduler'])
+        scheduler_name)
 else:
     z_discriminator = s_discriminators = None
 
@@ -184,7 +185,16 @@ for epoch in range(start_epoch, config['training']['epochs']):
             [evaluation.backpropagation_step(l, opt) for l, opt in zip(losses, d_optimizers)]
             if scheduler_name == 'cyclic':
                 [d_scheduler.step() for scheduler in d_schedulers]
-
+    
+            # write information to tensorboard
+            norms = [nn.utils.clip_grad_norm_(d.parameters(), config['training']['max_norm']) for d in
+                        [z_discriminator] + s_discriminators]
+            [writer.add_scalar(f'stats/grad_norm_discriminator_{idx}', norm, STEP) for idx, norm in enumerate(norms)]
+            [loss_discrim.append(loss.item()) for loss_discrim, loss in zip(losses_discrim, losses)]
+            if args.overfit or batch_idx % config['training']['batches_per_report'] == 0:
+                avg_losses = [np.mean(loss_discrim) for loss_discrim in losses_discrim]
+                [writer.add_scalar(f'stats/loss_discriminator_{idx}', avg_loss, STEP) for idx, avg_loss in enumerate(avg_losses)]
+    
         # write information to tensorboard
         norm = nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_norm'])
         writer.add_scalar('stats/grad_norm', norm, STEP)
@@ -217,7 +227,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
     start = time.time()
     model.eval()
     dev_loss, d_dev_losses, mean_entropy = evaluation.evaluate_lpp(
-            model, test_data, sample_size, config)
+            model, z_discriminator, s_discriminators, test_data, sample_size, config)
 
     writer.add_scalar('eval/loss', dev_loss, epoch)
     writer.add_scalar('stats/mean_entropy', mean_entropy, epoch)
@@ -228,7 +238,9 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
         if z_discriminator is not None:
             [d_scheduler.step(d_loss) for d_scheduler, d_loss in zip(d_schedulers, d_dev_losses)]
-
+            
+             # write information to tensorboard
+            [writer.add_scalar('eval/loss_discriminator_{}', d_dev_loss, epoch) for idx, d_dev_loss in enumerate(d_dev_losses)]
     # write predictions and ground truths to checkpoint dir
     if args.bleu and epoch >= config['training'].get('inference_start_epoch', 1):
         
