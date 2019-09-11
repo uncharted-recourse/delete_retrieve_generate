@@ -127,8 +127,13 @@ optimizer, scheduler = evaluation.define_optimizer_and_scheduler(config['trainin
 
 # define discriminator model, optimizers, and schedulers if adverarial paradigm
 if config['training']['discriminator_ratio'] > 0:
+    max_length_z = 1 if config['model']['encoder'] == 'transformer' else max_length 
+    hidden_dim = config['model']['tgt_hidden_dim'] if config['model']['decoder'] == 'lstm' else config['model']['emb_dim']
     z_discriminator, s_discriminators, d_optimizers, d_schedulers = discriminators.define_discriminators(
         n_styles,
+        max_length_z, 
+        max_length,
+        hidden_dim,
         working_dir, 
         config['training']['discriminator_learning_rate'],
         config['training']['optimizer'], 
@@ -141,6 +146,7 @@ epoch_loss = []
 start_since_last_report = time.time()
 words_since_last_report = 0
 losses_since_last_report = []
+losses_discrim = [[]]
 best_metric = 0.0
 best_epoch = 0
 cur_metric = 0.0 # log perplexity or BLEU

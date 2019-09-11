@@ -2,7 +2,9 @@
 import torch.nn as nn
 from pytorch_transformers import OpenAIGPTLMHeadModel, GPT2LMHeadModel#, XLNetLMHeadModel, TransfoXLLMHeadModel
 import torch.optim as optim
-
+from src import models
+from src.cuda import CUDA
+import logging
 # L_z - aligns latent state z 
     # inputs = final hidden states of encoder for each style s
 
@@ -32,63 +34,80 @@ class ConvNet(nn.Module):
         kernel_sizes = list of kernel sizes for each conv layer
         conv_dim = dimension of CNN input, can be 1 or 2
         """
-    def __init__(self, num_classes, num_channels, kernel_sizes, conv_dim):
+    def __init__(self, num_classes, num_channels, kernel_sizes, conv_dim, max_length, hidden_dim):
         
         super(ConvNet, self).__init__()
 
         self.num_classes = num_classes
         inp_channels = [1]
-        inp_channels.append(num_channels[1:])
-        
+        inp_channels += num_channels[1:]
+
         if conv_dim == 1:
-            self.conv_layers = [nn.Sequential(
-                nn.Conv2d(in_c, out_c, kernel_size=kernels, stride=1, padding=kernels // 2),
-                nn.BatchNorm2d(out_c),
-                nn.ReLU(),
-                nn.MaxPool2d(kernel_size=2, stride=2)) for in_c, out_c, kernels in zip(inp_channels, num_channels, kernel_sizes)]
-        elif conv_dim == 2: 
-            self.conv_layers = [nn.Sequential(
+            self.conv_layers = nn.ParameterList([nn.Sequential(
                 nn.Conv1d(in_c, out_c, kernel_size=kernels, stride=1, padding=kernels // 2),
                 nn.BatchNorm2d(out_c),
                 nn.ReLU(),
-                nn.MaxPool2d(kernel_size=2, stride=2)) for in_c, out_c, kernels in zip(inp_channels, num_channels, kernel_sizes)]
+                nn.MaxPool2d(kernel_size=2, stride=2)) for in_c, out_c, kernels in zip(inp_channels, num_channels, kernel_sizes)])
+        elif conv_dim == 2: 
+            self.conv_layers = nn.ParameterList([nn.Sequential(
+                nn.Conv2d(in_c, out_c, kernel_size=kernels, stride=1, padding=kernels // 2),
+                nn.BatchNorm2d(out_c),
+                nn.ReLU(),
+                nn.MaxPool2d(kernel_size=2, stride=2)) for in_c, out_c, kernels in zip(inp_channels, num_channels, kernel_sizes)])
         else:
             raise NotImplementedError("Convolution dimension must be one or two")
-
+        self.fc = nn.Linear(num_channels[-1] * max_length * hidden_dim, self.num_classes)
+ 
     def forward(self, content):
         for layer in self.conv_layers:
             content = layer(content)
+
+        # resize appropriately for fully connected layer
         content = content.reshape(content.size(0), -1)
+        return self.fc(content)
 
-        # define fully connected layer shape based on size of input
-        fc_input_dim = num_channels[-1]
-        for dim in content.size()[1:]:
-            fc_input_dim *= dim
-        fc = nn.Linear(fc_input_dim, self.num_classes)
+    # returns trainable params, untrainable params
+    def count_params(self):
+        n_trainable_params = 0
+        n_untrainable_params = 0
+        for param in self.parameters():
+            if param.requires_grad:
+                n_trainable_params += np.prod(param.data.cpu().numpy().shape)
+            else:
+                n_untrainable_params += np.prod(param.data.cpu().numpy().shape)
+        return n_trainable_params, n_untrainable_params
 
-        return fc(content)
-
-def define_discriminators(n_styles, working_dir, lr, optimizer_type, scheduler_type):
+def define_discriminators(n_styles, max_length_z, max_length_s, hidden_dim, working_dir, lr, optimizer_type, scheduler_type):
     """ Defines z and style discriminators, optimizers, and schedulers"""
 
     # z discriminator discriminates between z encoder final hidden state (lstm) 
     # or encoder output (transformer) from n styles
     z_discriminator = ConvNet(
-        n_styles = n_styles,
+        num_classes = n_styles,
         num_channels = [2,4], 
         kernel_sizes = [5,5], 
-        conv_dim = 1
+        conv_dim = 1, 
+        max_length = max_length_z, 
+        hidden_dim = hidden_dim
         )
 
     # style disciminators discriminate between hidden states (lstm) or output state
     # (transformer) from generated example and hidden states (lstm) or output state
     # (transformer) from teacher-forced example, for each style separately
-    s_discriminators = [ConvNet(2, 
+    s_discriminators = [ConvNet(
+        num_classes = 2, 
         num_channels = [2,4], 
-        kernel_sizes_s = [5,5], 
-        conv_dim = 2
+        kernel_sizes = [5,5], 
+        conv_dim = 2, 
+        max_length = max_length_s,
+        hidden_dim = hidden_dim
         ) for _ in range(0, n_styles)]
 
+    trainable, untrainable = z_discriminator.count_params()
+    logging.info(f'Z discriminator has {trainable} trainable params and {untrainable} untrainable params')
+    trainable, untrainable = s_discriminators[0].count_params()
+    logging.info(f'Style discriminators have {trainable} trainable params and {untrainable} untrainable params')
+    
     z_discriminator, _ = models.attempt_load_model(
         model=z_discriminator,
         checkpoint_dir=working_dir)
@@ -98,7 +117,8 @@ def define_discriminators(n_styles, working_dir, lr, optimizer_type, scheduler_t
     if CUDA:
         z_discriminator = z_discriminator.cuda()
         s_discriminators = [s_discriminator.cuda() for s_discriminator in s_discriminators]
-
+    print(z_discriminator.parameters())
+    print(s_discriminators[0].parameters())
     # define learning rates and scheduler
     # we've already checked for not implemented errors above 
     params = [z_discriminator.parameters()]
