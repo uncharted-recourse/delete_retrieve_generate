@@ -26,6 +26,39 @@ import logging
         # D(z,s) for each sub_minibatch s
     # Step 2: minimize L (update Enc, Dec)
 
+class CNNSequentialBlock(nn.Module):
+    """ 
+        Defines a sequential block for the CNN: convolution, batch norm, relu, maxpooling
+        Necessary for pytorch recognize parameters in list
+
+        in_channels = input channels for conv layer
+        out_channels = output channels for conv layer
+        kernel_size = kernel size for conv layer
+        conv_dim = dimension of conv input, can be 1 or 2 (also applies to maxpooling layer)
+    """
+    
+    def __init__(self, in_channels, out_channels, kernel_size, conv_dim):
+
+        super(CNNSequentialBlock, self).__init__()
+
+        if conv_dim == 1:
+            self.conv = nn.Conv1d(in_channels, out_channels, kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
+            self.max_pool = nn.MaxPool1d(kernel_size=2, stride=2))
+        elif conv_dim == 2:
+            self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=1, padding=kernel_size // 2),
+            self.max_pool = nn.MaxPool2d(kernel_size=2, stride=2))
+        else:
+            raise NotImplementedError("Convolution dimension must be one or two")
+        self.batch_norm = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU()
+
+    def forward(self, content):
+        out = self.conv(content)
+        out = self.batch_norm(out)
+        out = self.relu(out)
+        out = self.max_pool(out)
+        return out
+
 class ConvNet(nn.Module):
     """ wrapper for a relatively simple CNN 
 
@@ -38,33 +71,20 @@ class ConvNet(nn.Module):
         
         super(ConvNet, self).__init__()
 
-        self.num_classes = num_classes
         inp_channels = [1]
         inp_channels += num_channels[1:]
-
-        if conv_dim == 1:
-            self.conv_layers = nn.ParameterList([nn.Sequential(
-                nn.Conv1d(in_c, out_c, kernel_size=kernels, stride=1, padding=kernels // 2),
-                nn.BatchNorm2d(out_c),
-                nn.ReLU(),
-                nn.MaxPool2d(kernel_size=2, stride=2)) for in_c, out_c, kernels in zip(inp_channels, num_channels, kernel_sizes)])
-        elif conv_dim == 2: 
-            self.conv_layers = nn.ParameterList([nn.Sequential(
-                nn.Conv2d(in_c, out_c, kernel_size=kernels, stride=1, padding=kernels // 2),
-                nn.BatchNorm2d(out_c),
-                nn.ReLU(),
-                nn.MaxPool2d(kernel_size=2, stride=2)) for in_c, out_c, kernels in zip(inp_channels, num_channels, kernel_sizes)])
-        else:
-            raise NotImplementedError("Convolution dimension must be one or two")
+        layers = [CNNSequentialBlock(in_c, out_c, kernels, conv_dim) for 
+            in_c, out_c, kernels in zip(inp_channels, num_channels, kernel_sizes)]
+        self.conv_blocks = nn.Sequential(*layers)
         self.fc = nn.Linear(num_channels[-1] * max_length * hidden_dim, self.num_classes)
  
     def forward(self, content):
-        for layer in self.conv_layers:
-            content = layer(content)
+        out = self.conv_blocks(content)
 
         # resize appropriately for fully connected layer
-        content = content.reshape(content.size(0), -1)
-        return self.fc(content)
+        out = out.reshape(out.size(0), -1)
+        out = self.fc(out)
+        return out
 
     # returns trainable params, untrainable params
     def count_params(self):
