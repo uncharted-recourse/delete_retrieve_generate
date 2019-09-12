@@ -468,7 +468,7 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
 def back_translation_minibatch(datasets, config, batch_idx, sample_size, max_len, model, model_type):
 
     # get minibatch of inputs, attributes, outputs in other style direction
-    input_content, input_aux, output, ds_ordering = minibatch(datasets, idx, sample_size, max_len, 
+    input_content, input_aux, _, out_dataset_ordering = minibatch(datasets, idx, sample_size, max_len, 
         config['model']['model_type'], is_bt = True)
 
     # decode dataset with greedy, beam search, or top k
@@ -482,8 +482,7 @@ def back_translation_minibatch(datasets, config, batch_idx, sample_size, max_len
         get_start_id(tokenizer),
         get_stop_id(tokenizer),
         input_content,
-        input_aux,
-        output
+        input_aux
     )
     logging.info(f'Predicting one BT minibatch took {time.time() - s} seconds')
     preds = evaluation.ids_to_toks(tgt_pred, tokenizer, sort=False)
@@ -537,7 +536,8 @@ def minibatch(datasets, idx, batch_size, max_len, model_type, is_bt = False, is_
         for i in range(n_styles):
             if is_bt: # backtranslation randomly sample different intermediate style
                 tgt_idx = i
-                while tgt_idx == i:
+                # could do this more efficiently by sampling whole permutation
+                while tgt_idx == i or tgt_idx in out_dataset_ordering:
                     tgt_idx = random.randint(0, n_styles - 1)
             elif is_test: # test translate to next style in list to make eval easier
                 tgt_idx = (i + 1) % n_styles

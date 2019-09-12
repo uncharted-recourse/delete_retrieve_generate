@@ -111,15 +111,15 @@ def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, o
 
     # z discriminator discriminates between z encoder final hidden state (lstm) 
     # or encoder output (transformer) from n styles
-    z_discriminator = ConvNet(
-        num_classes = n_styles,
-        num_channels = [2,4], 
-        kernel_sizes = [5,5], 
-        conv_dim = 1, 
-        pooling_stride = 4,
-        max_length = 1, 
-        hidden_dim = hidden_dim
-        )
+    # z_discriminator = ConvNet(
+    #     num_classes = n_styles,
+    #     num_channels = [2,4], 
+    #     kernel_sizes = [5,5], 
+    #     conv_dim = 1, 
+    #     pooling_stride = 4,
+    #     max_length = 1, 
+    #     hidden_dim = hidden_dim
+    #     )
 
     # style disciminators discriminate between hidden states (lstm) or output state
     # (transformer) from generated example and hidden states (lstm) or output state
@@ -134,30 +134,30 @@ def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, o
         hidden_dim = hidden_dim
         ) for _ in range(0, n_styles)]
 
-    trainable, untrainable = z_discriminator.count_params()
-    logging.info(f'Z discriminator has {trainable} trainable params and {untrainable} untrainable params')
+    # trainable, untrainable = z_discriminator.count_params()
+    # logging.info(f'Z discriminator has {trainable} trainable params and {untrainable} untrainable params')
     trainable, untrainable = s_discriminators[0].count_params()
     logging.info(f'Style discriminators have {trainable} trainable params and {untrainable} untrainable params')
     
-    z_discriminator, _ = models.attempt_load_model(
-        model=z_discriminator,
-        checkpoint_dir=working_dir)
+    # z_discriminator, _ = models.attempt_load_model(
+    #     model=z_discriminator,
+    #     checkpoint_dir=working_dir)
     s_discriminators = [models.attempt_load_model(
         model=s_discriminator,
         checkpoint_dir=working_dir)[0] for s_discriminator in s_discriminators]
     if CUDA:
-        z_discriminator = z_discriminator.cuda()
+        # z_discriminator = z_discriminator.cuda()
         s_discriminators = [s_discriminator.cuda() for s_discriminator in s_discriminators]
     
     # define learning rates and scheduler
     # we've already checked for not implemented errors above 
-    params = [z_discriminator.parameters()]
-    for s_discriminator in s_discriminators:
-        params.append(s_discriminator.parameters())
+    # params = [z_discriminator.parameters()]
+    # for s_discriminator in s_discriminators:
+    #     params.append(s_discriminator.parameters())
     if optimizer_type == 'adam':
-        d_optimizers = [optim.Adam(param, lr=lr) for param in params]
+        d_optimizers = [optim.Adam(s_discriminators.parameters(), lr=lr) for s_discriminator in s_discriminators]
     else: 
-        d_optimizers = [optim.SGD(param, lr=lr) for param in params]
+        d_optimizers = [optim.SGD(s_discriminators.parameters(), lr=lr) for s_discriminator in s_discriminators]
     if scheduler_type == 'plateau':
         d_schedulers = [optim.lr_scheduler.ReduceLROnPlateau(d_optimizer, 'min') for d_optimizer in d_optimizers]
     else:
@@ -166,7 +166,7 @@ def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, o
             max_lr = 10 * lr
         ) for d_optimizer in d_optimizers]
     
-    return z_discriminator, s_discriminators, d_optimizers, d_schedulers
+    return s_discriminators, d_optimizers, d_schedulers
     
 # LM Discrim
 

@@ -128,7 +128,7 @@ optimizer, scheduler = evaluation.define_optimizer_and_scheduler(config['trainin
 # define discriminator model, optimizers, and schedulers if adverarial paradigm
 if config['training']['discriminator_ratio'] > 0:
     hidden_dim = config['model']['tgt_hidden_dim'] if config['model']['decoder'] == 'lstm' else config['model']['emb_dim']
-    z_discriminator, s_discriminators, d_optimizers, d_schedulers = discriminators.define_discriminators(
+    s_discriminators, d_optimizers, d_schedulers = discriminators.define_discriminators(
         n_styles,
         max_length,
         hidden_dim,
@@ -137,7 +137,7 @@ if config['training']['discriminator_ratio'] > 0:
         config['training']['optimizer'], 
         scheduler_name)
 else:
-    z_discriminator = s_discriminators = None
+    s_discriminators = None
 
 # main training loop
 epoch_loss = []
@@ -175,7 +175,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
         # calculate loss
         loss_crit = config['training']['loss_criterion']
-        train_loss, z_loss, s_losses, _ = evaluation.calculate_loss(train_data, n_styles, config, i, sample_size, max_length, 
+        train_loss, s_losses, _ = evaluation.calculate_loss(train_data, n_styles, config, i, sample_size, max_length, 
             config['model']['model_type'], model, z_discriminator, s_discriminators, loss_crit, bt_ratio = config['training']['bt_ratio'])
         loss_item = train_loss.item() if loss_crit == 'cross_entropy' else -train_loss.item()
         losses.append(loss_item)
@@ -183,22 +183,28 @@ for epoch in range(start_epoch, config['training']['epochs']):
         epoch_loss.append(loss_item)
 
         # update discriminator optimizer and schedulers
-        if z_discriminator is not None:
-            losses = [z_loss] + s_losses
-            [evaluation.backpropagation_step(l, opt) for l, opt in zip(losses, d_optimizers)]
+        if s_discriminators is not None:
+            bp_t = time.time()
+            [evaluation.backpropagation_step(l, opt, retain_graph=True) for l, opt in zip(s_losses, d_optimizers)]
+            bp_t1 = time.time()
+            log(f'backpropagation through discriminators took: {bp_t1 - bp_t} seconds', level='info')
+
             if scheduler_name == 'cyclic':
                 [d_scheduler.step() for scheduler in d_schedulers]
     
             # write information to tensorboard
-            norms = [nn.utils.clip_grad_norm_(d.parameters(), config['training']['max_norm']) for d in
-                        [z_discriminator] + s_discriminators]
+            norms = [nn.utils.clip_grad_norm_(d.parameters(), config['training']['max_norm']) for d in s_discriminators]
             [writer.add_scalar(f'stats/grad_norm_discriminator_{idx}', norm, STEP) for idx, norm in enumerate(norms)]
-            [loss_discrim.append(loss.item()) for loss_discrim, loss in zip(losses_discrim, losses)]
+            [loss_discrim.append(loss.item()) for loss_discrim, loss in zip(losses_discrim, s_losses)]
             if args.overfit or batch_idx % config['training']['batches_per_report'] == 0:
                 avg_losses = [np.mean(loss_discrim) for loss_discrim in losses_discrim]
                 [writer.add_scalar(f'stats/loss_discriminator_{idx}', avg_loss, STEP) for idx, avg_loss in enumerate(avg_losses)]
     
+        bp_t = time.time()
         evaluation.backpropagation_step(train_loss, optimizer, retain_graph = False)
+        bp_t1 = time.time()
+        log(f'backpropagation through S2S took: {bp_t1 - bp_t} seconds', level='info')
+        
         # write information to tensorboard
         norm = nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_norm'])
         writer.add_scalar('stats/grad_norm', norm, STEP)

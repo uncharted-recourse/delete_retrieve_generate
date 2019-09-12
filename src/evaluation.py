@@ -15,6 +15,7 @@ from src.callbacks import mean_masked_entropy
 import random
 import time
 from modules.expectedMultiBleu import bleu as expected_bleu
+from itertools import permutations
 
 import os
 import logging
@@ -71,7 +72,7 @@ def get_edit_distance(hypotheses, reference):
 
     return ed * 1.0 / len(hypotheses)
 
-def backpropagation_step(loss, optimizer, retain_graph = True):
+def backpropagation_step(loss, optimizer, retain_graph = False):
     """ perform one step of backpropagation"""
     optimizer.zero_grad()
     loss.backward(retain_graph = retain_graph)
@@ -99,44 +100,57 @@ def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
         raise NotImplementedError("Learning scheduler not recommended for this task")
     return optimizer, scheduler
 
-def calculate_discriminator_loss(content_data, attr_data, tgt_data, tokenizer, model, z_discriminator,
-                                s_discriminators, config, encoder_state, decoder_states, sample_size, max_length):
+def calculate_discriminator_loss(dataset, content_data, attr_data, idx, tokenizer, model, z_discriminator,
+                                s_discriminators, config, decoder_states, sample_size, max_length):
     """ calculate discriminator loss over encoder states and tf decoder states vs. soft decoder states"""
 
+    t = time.time()
+    # sample minibatch from bt paradigm (next style for now)
+    new_content, new_attr, _, out_dataset_ordering = minibatch(dataset, idx, sample_size, max_length, 
+        config['model']['model_type'], is_bt = True)
+
     # generate sequences to compare to teacher-forced outputs from above
-    _, soft_decoder_states = generate_sequences(
+    _, generated_decoder_states = generate_sequences(
         tokenizer,
         model, 
         config,
         data.get_start_id(tokenizer),
         data.get_stop_id(tokenizer),
-        content_data,
-        attr_data,
-        tgt_data
+        content_data, # this could also be new_content (they are the same)
+        new_attr,
     )
-    # pass encoder states and decoder states to discriminator module
-    z_output = z_discriminator(encoder_state)
+    t1 = time.time()
+    log(f'generating decoder states to different styles took: {t1 - t} seconds', level='info')
+
+    # shuffle decoder states according to sampled minibatch ordering
+    shuffled_order = [i for j in out_dataset_ordering for i in range(j * sample_size, (j+1) * sample_size)]
+    decoder_states_shuffled = decoder_states[shuffled_order]
+    assert decoder_states_shuffled[0] == decoder_states[shuffled_order[0]]
+
+    # pass decoder states to discriminator module
     s_outputs = []
     for i in range(len(s_discriminators)):
-        decoder_states_sample = decoder_states[i * sample_size:(i+1) * sample_size]
-        soft_decoder_states_sample = soft_decoder_states[i * sample_size:(i+1) * sample_size]
-        s_outputs.append(s_discriminators[i].forward(torch.cat((decoder_states_sample, soft_decoder_states_sample), dim=0)))
+        decoder_states_sample = decoder_states_shuffled[i * sample_size:(i+1) * sample_size]
+        gen_decoder_states_sample = generated_decoder_states[i * sample_size:(i+1) * sample_size]
+        s_outputs.append(s_discriminators[i].forward(torch.cat((decoder_states_sample, gen_decoder_states_sample), dim=0)))
+    t2 = time.time()
+    log(f'forward pass through discriminators took: {t2 - t1} seconds', level='info')
 
     # calculate cross entropy loss over discriminators
-    # for now use input_ids_aux as style labels (D model), would need to update for D+R model
     loss_criterion_d = nn.CrossEntropyLoss()
     # tf decoder states get label 1, soft decoder states get label 0
     decoder_labels = torch.cat((torch.ones(sample_size, dtype=torch.long), torch.zeros(sample_size, dtype = torch.long)))
     if CUDA:
         loss_criterion_d = loss_criterion_d.cuda()
         decoder_labels = decoder_labels.cuda()
-    z_loss = loss_criterion_d(z_output, attr_data[0])
     s_losses = [loss_criterion_d(style_output, decoder_labels) for style_output in s_outputs]
+    t3 = time.time()
+    log(f'calculating loss on discriminators took: {t3 - t2} seconds', level='info')
 
-    return z_loss, s_losses
+    return s_losses
 
 def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length, model_type, model, 
-                    z_discriminator, s_discriminators, loss_crit = 'cross_entropy', bt_ratio = 1, is_test = False):
+                    s_discriminators, loss_crit = 'cross_entropy', bt_ratio = 1, is_test = False):
     """ sample minibatch, pass minibatch through model, calculate loss and entropy according to config"""
 
     # sample even number of samples from each corpus according to batch size, 
@@ -146,7 +160,7 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
     input_ids_aux, _, auxlens, auxmask, _ = auxs_packed
     input_lines_tgt, output_lines_tgt, tgtlens, tgtmask, _ = tgt_packed
 
-    decoder_logit, decoder_probs, encoder_state, decoder_states = model(
+    decoder_logit, decoder_probs, decoder_states = model(
         input_lines_src, input_lines_tgt, srcmask, srclens,
         input_ids_aux, auxlens, auxmask, tgtmask)
     
@@ -182,16 +196,13 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
     # mean entropy
     mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
 
-    # calculate discriminator loss if doing adversarial training
-    if z_discriminator is not None:
-        z_loss, s_losses = calculate_discriminator_loss(src_packed, auxs_packed, tgt_packed, tokenizer, 
-                model, z_discriminator, s_discriminators, config, encoder_state, decoder_states, sample_size, max_length)
-        d_loss_total = z_loss
-        for s_loss in s_losses:
-            d_loss_total += s_loss
-        loss = loss - config['training']['discriminator_ratio'] * d_loss_total
+    # calculate discriminator loss if doing adversarial training, 
+    if s_discriminators is not None:
+        s_losses = calculate_discriminator_loss(dataset, src_packed, auxs_packed, batch_idx, tokenizer, 
+                model, s_discriminators, config, decoder_states, sample_size, max_length)
+        loss = loss - config['training']['discriminator_ratio'] * sum(s_losses)
     else: 
-        z_loss = s_losses = None
+        s_losses = None
 
     # get backtranslation minibatch (BT should be turned off for evaluation)
     if bt_ratio > 0 and not is_test:
@@ -202,7 +213,7 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
         bt_input_ids_aux, _, bt_auxlens, bt_auxmask, _ = auxs_packed
         bt_input_lines_tgt, bt_output_lines_tgt, bt_tgtlens, bt_tgtmask, _ = tgt_packed
 
-        bt_decoder_logit, bt_decoder_probs, bt_encoder_state, bt_decoder_states = model(
+        bt_decoder_logit, bt_decoder_probs, bt_decoder_states = model(
             bt_input_lines_src, bt_input_lines_tgt, bt_srcmask, bt_srclens,
             bt_input_ids_aux, bt_auxlens, bt_auxmask, bt_tgtmask)
         
@@ -219,14 +230,10 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
 
         # calculate discriminator loss if doing adversarial training
         if z_discriminator is not None:
-            bt_z_loss, bt_s_losses = calculate_discriminator_loss(src_packed, auxs_packed, tgt_packed, tokenizer, 
-                    model, z_discriminator, s_discriminators, config, bt_encoder_state, bt_decoder_states, sample_size)
-            z_loss = (bt_ratio * bt_d_loss + z_loss) / 2
+            bt_s_losses = calculate_discriminator_loss(dataset, src_packed, auxs_packed, batch_idx, tokenizer, 
+                    model, s_discriminators, config, bt_decoder_states, sample_size, max_length)
             s_losses = [(bt_ratio * bt_s_loss + s_loss) / 2 for bt_s_loss, s_loss in zip(bt_s_losses, s_losses)]
-            bt_d_loss_total += bt_z_loss
-            for s_loss in bt_s_losses:
-                bt_d_loss_total += s_loss
-            bt_loss = bt_loss - config['training']['discriminator_ratio'] * bt_d_loss_total
+            bt_loss = bt_loss - config['training']['discriminator_ratio'] * sum(s_losses)
 
         # combine losses
         loss = (bt_ratio * bt_loss + loss) / 2
@@ -236,7 +243,7 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
         mean_entropy = (bt_ratio * bt_mean_entropy + mean_entropy) / 2
  
     # return combined loss, discrim loss, and combined mean entropy  
-    return loss, z_loss, s_losses, mean_entropy
+    return loss, s_losses, mean_entropy
 
 def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclens, srcmask,
         aux_input, auxlens, auxmask):
@@ -262,7 +269,7 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
 
     for i in range(max_len):
         # run input through the model
-        decoder_logit, word_probs, _, decoder_states = model(src_input, tgt_input, 
+        decoder_logit, word_probs, decoder_states = model(src_input, tgt_input, 
             srcmask, srclens, aux_input, auxmask, auxlens, tgt_mask)
         decoder_argmax = word_probs.data.cpu().numpy()[:,-1,:].argmax(axis=-1)
         
@@ -278,7 +285,7 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
         tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
 
-    # return last value of encoder_state (always the same) and decoder_states (argmax sampling)
+    # return decoder_states (argmax sampling)
     return tgt_input, decoder_states
 
 def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
@@ -299,12 +306,11 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     else:
          return tok_seqs
 
-def generate_sequences(tokenizer, model, config, start_id, stop_id, input_content, input_aux, output):
+def generate_sequences(tokenizer, model, config, start_id, stop_id, input_content, input_aux):
     "generate sequences of output by sampling from token distribution according to decoding strategy"
     
-    input_lines_src, output_lines_src, srclens, srcmask, indices = input_content
+    input_lines_src, _, srclens, srcmask, _ = input_content
     input_ids_aux, _, auxlens, auxmask, _ = input_aux
-    input_lines_tgt, output_lines_tgt, _, _, _ = output
 
     # decode dataset with greedy, beam search, or top k
     start_time = time.time()
@@ -378,7 +384,6 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
             data.get_stop_id(tokenizer),
             src_packed,
             auxs_packed,
-            tgt_packed
         )
 
         # convert inputs/preds/targets/aux to human-readable form
@@ -424,16 +429,14 @@ def evaluate_lpp(model, z_discriminator, s_discriminators, test_data, sample_siz
         sys.stdout.flush()
 
         loss_crit = config['training']['loss_criterion']
-        combined_loss, z_loss, s_loss, combined_mean_entropy = calculate_loss(test_data, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
+        combined_loss, s_losses, combined_mean_entropy = calculate_loss(test_data, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
             config['model']['model_type'], model, z_discriminator, s_discriminators, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test=True)
 
         loss_item = combined_loss.item() if loss_crit == 'cross_entropy' else -combined_loss.item()
         losses.append(loss_item)
 
-        if z_loss is not None: 
-            d_losses[0].append(z_loss.item())
-            for d_loss, s_l in zip(d_losses[1:], s_loss):
-                d_loss.append(s_l)
+        if s_losses is not None: 
+            [d_loss.append(s_loss.item()) for d_loss, s_loss in zip(d_losses, s_los_losses)]
             d_means = [np.mean(d_loss) for d_loss in d_losses]
         else:
             d_means = None
@@ -561,7 +564,7 @@ def get_next_token_scores(model, src_input, tgt_input, srcmask, srclen,
         auxmask = auxmask.unsqueeze(0)
     if CUDA:
         tgt_input = tgt_input.cuda()
-    decoder_logit, word_probs, _, _ = model(src_input, tgt_input, srcmask, srclen,
+    decoder_logit, word_probs, _ = model(src_input, tgt_input, srcmask, srclen,
         aux_input, auxmask, auxlen)
     return decoder_logit.data.cpu().numpy()[0, -1, :]
 
@@ -601,7 +604,7 @@ def decode_top_k(
 
     for i in range(max_len):
         # run input through the model
-        decoder_logits, _, _, decoder_states = model(src_input, tgt_input, srcmask, srclens,
+        decoder_logits, _, decoder_states = model(src_input, tgt_input, srcmask, srclens,
             aux_input, auxmask, auxlens, tgt_mask)
         decoder_logits = decoder_logits.data.cpu().numpy()[:,-1,:]
 
@@ -626,7 +629,7 @@ def decode_top_k(
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
         tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
 
-    # return last value of encoder_state (always the same) and decoder_states (top_k sampling)
+    # return decoder_states (top_k sampling)
     return tgt_input, decoder_states
 
 class Beam(object):

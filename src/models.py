@@ -293,13 +293,8 @@ class SeqModel(nn.Module):
 
         probs = self.softmax(decoder_logit)
 
-        # in adversarial paradigm, also return 
-        #   a. final hidden state of encoder (lstm) / encoder output (transformer)
-        #   b. hidden states of decoder (lstm) / decoder output (transformer)
-        if self.options['encoder'] == 'lstm':
-            return decoder_logit, probs, h_t_encoder, tgt_outputs
-        elif self.options['encoder'] == 'transformer':
-            return decoder_logit, probs, src_outputs_encoder, tgt_outputs
+        # in adversarial paradigm, also return decoder output (equivalent to hidden states in lstm architecture)
+        return decoder_logit, probs, tgt_outputs
 
     # returns trainable params, untrainable params
     def count_params(self):
