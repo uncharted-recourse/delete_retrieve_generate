@@ -206,12 +206,9 @@ class SeqModel(nn.Module):
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
         src_emb = self.src_embedding(input_src)
-        #print(src_emb.size())
-        #srcmask = (1-srcmask).byte()
 
         if self.options['encoder'] == 'lstm':
             src_outputs, (src_h_t, src_c_t) = self.encoder(src_emb, srclens, srcmask)
-            
             if self.options['bidirectional']:
                 h_t_encoder = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
                 c_t_encoder = torch.cat((src_c_t[-1], src_c_t[-2]), 1)
@@ -240,7 +237,7 @@ class SeqModel(nn.Module):
                 a_ht = torch.unsqueeze(a_ht, 1)
                 src_outputs = torch.cat((a_ht, src_outputs_encoder), 1)
                 src_outputs = self.ctx_bridge(src_outputs)
-                a_mask = Variable(torch.LongTensor([[False] for i in range(input_src.size(0))]))#.byte()
+                a_mask = Variable(torch.BoolTensor([[False] for i in range(input_src.size(0))]))#.byte()
                 if CUDA:
                     a_mask = a_mask.cuda()
                 srcmask = torch.cat((a_mask, srcmask), dim = 1)
@@ -268,7 +265,7 @@ class SeqModel(nn.Module):
         # # # #  # # # #  # #  # # # # # # #  # # end diff
         tgt_emb = self.tgt_embedding(input_tgt)
         if self.options['decoder'] == 'lstm':
-            tgt_outputs, (tgt_h_t, tgt_c_t) = self.decoder(
+            tgt_outputs, _ = self.decoder(
                 tgt_emb,
                 (h_t, c_t),
                 src_outputs,
@@ -300,7 +297,7 @@ class SeqModel(nn.Module):
         #   a. final hidden state of encoder (lstm) / encoder output (transformer)
         #   b. hidden states of decoder (lstm) / decoder output (transformer)
         if self.options['encoder'] == 'lstm':
-            return decoder_logit, probs, src_h_t[-1], tgt_h_t
+            return decoder_logit, probs, h_t_encoder, tgt_outputs
         elif self.options['encoder'] == 'transformer':
             return decoder_logit, probs, src_outputs_encoder, tgt_outputs
 

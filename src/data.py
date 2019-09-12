@@ -422,11 +422,10 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
 
     lines = [
         [get_start_id(tokenizer)] + 
-        tokenizer.encode(" ".join(line))[:max_len] + 
+        tokenizer.encode(" ".join(line))[:max_len - 2] + 
         [get_stop_id(tokenizer)] for line in lines]
 
     lens = [len(line) - 1 for line in lines]
-    max_len = max(lens)
     
     input_lines = [
         line[:-1] +
@@ -458,7 +457,6 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
     input_lines = Variable(torch.LongTensor(input_lines))
     output_lines = Variable(torch.LongTensor(output_lines))
     mask = Variable(torch.BoolTensor(mask))
-
     if CUDA:
         input_lines = input_lines.cuda()
         output_lines = output_lines.cuda()

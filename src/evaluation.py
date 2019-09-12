@@ -71,10 +71,10 @@ def get_edit_distance(hypotheses, reference):
 
     return ed * 1.0 / len(hypotheses)
 
-def backpropagation_step(loss, optimizer):
+def backpropagation_step(loss, optimizer, retain_graph = True):
     """ perform one step of backpropagation"""
     optimizer.zero_grad()
-    loss.backward()
+    loss.backward(retain_graph = retain_graph)
     optimizer.step()
 
 def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
@@ -100,7 +100,7 @@ def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
     return optimizer, scheduler
 
 def calculate_discriminator_loss(content_data, attr_data, tgt_data, tokenizer, model, z_discriminator,
-                                s_discriminators, config, encoder_state, decoder_states, sample_size):
+                                s_discriminators, config, encoder_state, decoder_states, sample_size, max_length):
     """ calculate discriminator loss over encoder states and tf decoder states vs. soft decoder states"""
 
     # generate sequences to compare to teacher-forced outputs from above
@@ -114,30 +114,26 @@ def calculate_discriminator_loss(content_data, attr_data, tgt_data, tokenizer, m
         attr_data,
         tgt_data
     )
-
-    # truncate decoder_states to match seq. length of decoder_states from teacher-forced generation
-    soft_decoder_states = soft_decoder_states[:, decoder_states.size(1), :]
-
     # pass encoder states and decoder states to discriminator module
     z_output = z_discriminator(encoder_state)
     s_outputs = []
-    for i in range(len(s_discriminators) + 1):
-        decoder_states = decoder_states[i * sample_size:(i+1) * sample_size]
-        soft_decoder_states = soft_decoder_states[i * sample_size:(i+1) * sample_size]
-        s_outputs.append(s_discriminators[i].forward(torch.cat((decoder_states, soft_decoder_states), dim=0)))
+    for i in range(len(s_discriminators)):
+        decoder_states_sample = decoder_states[i * sample_size:(i+1) * sample_size]
+        soft_decoder_states_sample = soft_decoder_states[i * sample_size:(i+1) * sample_size]
+        s_outputs.append(s_discriminators[i].forward(torch.cat((decoder_states_sample, soft_decoder_states_sample), dim=0)))
 
     # calculate cross entropy loss over discriminators
     # for now use input_ids_aux as style labels (D model), would need to update for D+R model
     loss_criterion_d = nn.CrossEntropyLoss()
     # tf decoder states get label 1, soft decoder states get label 0
-    decoder_labels = torch.cat((torch.ones(sample_size, 1), torch.ones(sample_size, 0)))
+    decoder_labels = torch.cat((torch.ones(sample_size, dtype=torch.long), torch.zeros(sample_size, dtype = torch.long)))
     if CUDA:
         loss_criterion_d = loss_criterion_d.cuda()
         decoder_labels = decoder_labels.cuda()
-    z_loss = loss_criterion_d(z_output, input_ids_aux)
+    z_loss = loss_criterion_d(z_output, attr_data[0])
     s_losses = [loss_criterion_d(style_output, decoder_labels) for style_output in s_outputs]
 
-    return d_loss, s_losses
+    return z_loss, s_losses
 
 def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length, model_type, model, 
                     z_discriminator, s_discriminators, loss_crit = 'cross_entropy', bt_ratio = 1, is_test = False):
@@ -189,7 +185,7 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
     # calculate discriminator loss if doing adversarial training
     if z_discriminator is not None:
         z_loss, s_losses = calculate_discriminator_loss(src_packed, auxs_packed, tgt_packed, tokenizer, 
-                model, z_discriminator, s_discriminators, config, encoder_state, decoder_states, sample_size)
+                model, z_discriminator, s_discriminators, config, encoder_state, decoder_states, sample_size, max_length)
         d_loss_total = z_loss
         for s_loss in s_losses:
             d_loss_total += s_loss

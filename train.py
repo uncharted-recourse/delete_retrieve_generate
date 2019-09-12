@@ -127,11 +127,9 @@ optimizer, scheduler = evaluation.define_optimizer_and_scheduler(config['trainin
 
 # define discriminator model, optimizers, and schedulers if adverarial paradigm
 if config['training']['discriminator_ratio'] > 0:
-    max_length_z = 1 if config['model']['encoder'] == 'transformer' else max_length 
     hidden_dim = config['model']['tgt_hidden_dim'] if config['model']['decoder'] == 'lstm' else config['model']['emb_dim']
     z_discriminator, s_discriminators, d_optimizers, d_schedulers = discriminators.define_discriminators(
         n_styles,
-        max_length_z, 
         max_length,
         hidden_dim,
         working_dir, 
@@ -183,7 +181,6 @@ for epoch in range(start_epoch, config['training']['epochs']):
         losses.append(loss_item)
         losses_since_last_report.append(loss_item)
         epoch_loss.append(loss_item)
-        evaluation.backpropagation_step(train_loss, optimizer)
 
         # update discriminator optimizer and schedulers
         if z_discriminator is not None:
@@ -201,6 +198,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
                 avg_losses = [np.mean(loss_discrim) for loss_discrim in losses_discrim]
                 [writer.add_scalar(f'stats/loss_discriminator_{idx}', avg_loss, STEP) for idx, avg_loss in enumerate(avg_losses)]
     
+        evaluation.backpropagation_step(train_loss, optimizer, retain_graph = False)
         # write information to tensorboard
         norm = nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_norm'])
         writer.add_scalar('stats/grad_norm', norm, STEP)

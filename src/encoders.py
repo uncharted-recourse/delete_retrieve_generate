@@ -8,7 +8,7 @@ from src.cuda import CUDA
 
 class LSTMEncoder(nn.Module):
     """ simple wrapper for a bi-lstm """
-    def __init__(self, emb_dim, hidden_dim, layers, bidirectional, dropout, pack=True):
+    def __init__(self, emb_dim, hidden_dim, layers, bidirectional, dropout, pack=False):
         super(LSTMEncoder, self).__init__()
 
         self.num_directions = 2 if bidirectional else 1

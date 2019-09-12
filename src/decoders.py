@@ -33,6 +33,7 @@ class BilinearAttention(nn.Module):
         # [Batch, Source length]
         attn_scores = torch.bmm(keys, decoder_hidden).squeeze(2)
         if srcmask is not None:
+            srcmask = srcmask.byte()
             attn_scores = attn_scores.masked_fill(srcmask, -float('inf'))
             
         attn_probs = self.softmax(attn_scores)

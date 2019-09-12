@@ -1,10 +1,12 @@
-
+import torch
 import torch.nn as nn
 from pytorch_transformers import OpenAIGPTLMHeadModel, GPT2LMHeadModel#, XLNetLMHeadModel, TransfoXLLMHeadModel
 import torch.optim as optim
 from src import models
 from src.cuda import CUDA
 import logging
+import numpy as np
+
 # L_z - aligns latent state z 
     # inputs = final hidden states of encoder for each style s
 
@@ -37,19 +39,20 @@ class CNNSequentialBlock(nn.Module):
         conv_dim = dimension of conv input, can be 1 or 2 (also applies to maxpooling layer)
     """
     
-    def __init__(self, in_channels, out_channels, kernel_size, conv_dim):
+    def __init__(self, in_channels, out_channels, kernel_size, conv_dim, pooling_stride):
 
         super(CNNSequentialBlock, self).__init__()
 
         if conv_dim == 1:
             self.conv = nn.Conv1d(in_channels, out_channels, kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
-            self.max_pool = nn.MaxPool1d(kernel_size=2, stride=2))
+            self.max_pool = nn.MaxPool1d(kernel_size=2, stride=pooling_stride)
+            self.batch_norm = nn.BatchNorm1d(out_channels)
         elif conv_dim == 2:
-            self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=1, padding=kernel_size // 2),
-            self.max_pool = nn.MaxPool2d(kernel_size=2, stride=2))
+            self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
+            self.max_pool = nn.MaxPool2d(kernel_size=2, stride=pooling_stride)
+            self.batch_norm = nn.BatchNorm2d(out_channels)
         else:
             raise NotImplementedError("Convolution dimension must be one or two")
-        self.batch_norm = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU()
 
     def forward(self, content):
@@ -67,20 +70,26 @@ class ConvNet(nn.Module):
         kernel_sizes = list of kernel sizes for each conv layer
         conv_dim = dimension of CNN input, can be 1 or 2
         """
-    def __init__(self, num_classes, num_channels, kernel_sizes, conv_dim, max_length, hidden_dim):
+    def __init__(self, num_classes, num_channels, kernel_sizes, conv_dim, pooling_stride, max_length, hidden_dim):
         
         super(ConvNet, self).__init__()
 
         inp_channels = [1]
-        inp_channels += num_channels[1:]
-        layers = [CNNSequentialBlock(in_c, out_c, kernels, conv_dim) for 
+        inp_channels += num_channels[:-1]
+        layers = [CNNSequentialBlock(in_c, out_c, kernels, conv_dim, pooling_stride) for 
             in_c, out_c, kernels in zip(inp_channels, num_channels, kernel_sizes)]
         self.conv_blocks = nn.Sequential(*layers)
-        self.fc = nn.Linear(num_channels[-1] * max_length * hidden_dim, self.num_classes)
+        
+        # construct fully connected layer based on reduction dimensions
+        reduce_factor = pooling_stride ** len(layers) 
+        max_length = max_length // reduce_factor if max_length != 1 else max_length
+        fc_in_dim = int(num_channels[-1] * max_length * (hidden_dim // reduce_factor))
+        self.fc = nn.Linear(fc_in_dim, num_classes)
  
     def forward(self, content):
+        # resize input for first convolutional block 
+        content = torch.unsqueeze(content, 1)
         out = self.conv_blocks(content)
-
         # resize appropriately for fully connected layer
         out = out.reshape(out.size(0), -1)
         out = self.fc(out)
@@ -97,7 +106,7 @@ class ConvNet(nn.Module):
                 n_untrainable_params += np.prod(param.data.cpu().numpy().shape)
         return n_trainable_params, n_untrainable_params
 
-def define_discriminators(n_styles, max_length_z, max_length_s, hidden_dim, working_dir, lr, optimizer_type, scheduler_type):
+def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, optimizer_type, scheduler_type):
     """ Defines z and style discriminators, optimizers, and schedulers"""
 
     # z discriminator discriminates between z encoder final hidden state (lstm) 
@@ -107,7 +116,8 @@ def define_discriminators(n_styles, max_length_z, max_length_s, hidden_dim, work
         num_channels = [2,4], 
         kernel_sizes = [5,5], 
         conv_dim = 1, 
-        max_length = max_length_z, 
+        pooling_stride = 4,
+        max_length = 1, 
         hidden_dim = hidden_dim
         )
 
@@ -119,6 +129,7 @@ def define_discriminators(n_styles, max_length_z, max_length_s, hidden_dim, work
         num_channels = [2,4], 
         kernel_sizes = [5,5], 
         conv_dim = 2, 
+        pooling_stride = 4,
         max_length = max_length_s,
         hidden_dim = hidden_dim
         ) for _ in range(0, n_styles)]
@@ -137,8 +148,7 @@ def define_discriminators(n_styles, max_length_z, max_length_s, hidden_dim, work
     if CUDA:
         z_discriminator = z_discriminator.cuda()
         s_discriminators = [s_discriminator.cuda() for s_discriminator in s_discriminators]
-    print(z_discriminator.parameters())
-    print(s_discriminators[0].parameters())
+    
     # define learning rates and scheduler
     # we've already checked for not implemented errors above 
     params = [z_discriminator.parameters()]
