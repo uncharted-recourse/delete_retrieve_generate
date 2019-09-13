@@ -343,7 +343,7 @@ class FusedSeqModel(SeqModel):
         lm_logit = self.language_model.forward(input_tgt)
 
         # generate s2s logits
-        s2s_logit, _, encoder_states, decoder_states = super(FusedSeqModel, self).forward(input_src,
+        s2s_logit, _, decoder_states = super(FusedSeqModel, self).forward(input_src,
             input_tgt,
             srcmask,
             srclens,
@@ -361,7 +361,7 @@ class FusedSeqModel(SeqModel):
 
         probs = self.softmax(combined_logit)
 
-        return combined_logit, probs, encoder_states, decoder_states
+        return combined_logit, probs, decoder_states
 
     def count_params(self):
         return super(FusedSeqModel, self).count_params()

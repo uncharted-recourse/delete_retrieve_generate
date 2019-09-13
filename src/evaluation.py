@@ -100,13 +100,13 @@ def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
         raise NotImplementedError("Learning scheduler not recommended for this task")
     return optimizer, scheduler
 
-def calculate_discriminator_loss(dataset, content_data, attr_data, idx, tokenizer, model, z_discriminator,
+def calculate_discriminator_loss(dataset, content_data, attr_data, idx, tokenizer, model,
                                 s_discriminators, config, decoder_states, sample_size, max_length):
     """ calculate discriminator loss over encoder states and tf decoder states vs. soft decoder states"""
 
     t = time.time()
     # sample minibatch from bt paradigm (next style for now)
-    new_content, new_attr, _, out_dataset_ordering = minibatch(dataset, idx, sample_size, max_length, 
+    new_content, new_attr, _, out_dataset_ordering = data.minibatch(dataset, idx, sample_size, max_length, 
         config['model']['model_type'], is_bt = True)
 
     # generate sequences to compare to teacher-forced outputs from above
@@ -125,7 +125,7 @@ def calculate_discriminator_loss(dataset, content_data, attr_data, idx, tokenize
     # shuffle decoder states according to sampled minibatch ordering
     shuffled_order = [i for j in out_dataset_ordering for i in range(j * sample_size, (j+1) * sample_size)]
     decoder_states_shuffled = decoder_states[shuffled_order]
-    assert decoder_states_shuffled[0] == decoder_states[shuffled_order[0]]
+    assert torch.all(torch.eq(decoder_states_shuffled[0], decoder_states[shuffled_order[0]]))
 
     # pass decoder states to discriminator module
     s_outputs = []
@@ -319,7 +319,7 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
             config['data']['max_len'], start_id, stop_id, 
             model, input_lines_src, srclens, srcmask,
             input_ids_aux, auxlens, auxmask)
-        log(f'greedy search decoding took: {time.time() - start_time}', level='debug')
+        log(f'greedy search decoding took: {time.time() - start_time}', level='info')
     # elif config['model']['decode'] == 'beam_search':
     #     start_time = time.time()
     #     if config['model']['model_type'] == 'delete_retrieve':
@@ -346,7 +346,8 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
             input_ids_aux, auxlens, auxmask, 
             config['model']['k'], config['model']['temperature']
         )
-        log(f'top k decoding took: {time.time() - start_time}', level='debug')
+        log(f'top k decoding took: {time.time() - start_time}', level='info')
+
     else:
         raise Exception('Decoding method must be one of greedy or top_k')
 

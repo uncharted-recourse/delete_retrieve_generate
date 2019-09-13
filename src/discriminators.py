@@ -155,9 +155,9 @@ def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, o
     # for s_discriminator in s_discriminators:
     #     params.append(s_discriminator.parameters())
     if optimizer_type == 'adam':
-        d_optimizers = [optim.Adam(s_discriminators.parameters(), lr=lr) for s_discriminator in s_discriminators]
+        d_optimizers = [optim.Adam(s_discriminator.parameters(), lr=lr) for s_discriminator in s_discriminators]
     else: 
-        d_optimizers = [optim.SGD(s_discriminators.parameters(), lr=lr) for s_discriminator in s_discriminators]
+        d_optimizers = [optim.SGD(s_discriminator.parameters(), lr=lr) for s_discriminator in s_discriminators]
     if scheduler_type == 'plateau':
         d_schedulers = [optim.lr_scheduler.ReduceLROnPlateau(d_optimizer, 'min') for d_optimizer in d_optimizers]
     else:

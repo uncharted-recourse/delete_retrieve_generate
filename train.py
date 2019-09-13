@@ -176,7 +176,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         # calculate loss
         loss_crit = config['training']['loss_criterion']
         train_loss, s_losses, _ = evaluation.calculate_loss(train_data, n_styles, config, i, sample_size, max_length, 
-            config['model']['model_type'], model, z_discriminator, s_discriminators, loss_crit, bt_ratio = config['training']['bt_ratio'])
+            config['model']['model_type'], model, s_discriminators, loss_crit, bt_ratio = config['training']['bt_ratio'])
         loss_item = train_loss.item() if loss_crit == 'cross_entropy' else -train_loss.item()
         losses.append(loss_item)
         losses_since_last_report.append(loss_item)
@@ -187,7 +187,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
             bp_t = time.time()
             [evaluation.backpropagation_step(l, opt, retain_graph=True) for l, opt in zip(s_losses, d_optimizers)]
             bp_t1 = time.time()
-            log(f'backpropagation through discriminators took: {bp_t1 - bp_t} seconds', level='info')
+            logging.info(f'backpropagation through discriminators took: {bp_t1 - bp_t} seconds')
 
             if scheduler_name == 'cyclic':
                 [d_scheduler.step() for scheduler in d_schedulers]
@@ -203,7 +203,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         bp_t = time.time()
         evaluation.backpropagation_step(train_loss, optimizer, retain_graph = False)
         bp_t1 = time.time()
-        log(f'backpropagation through S2S took: {bp_t1 - bp_t} seconds', level='info')
+        logging.info(f'backpropagation through S2S took: {bp_t1 - bp_t} seconds')
         
         # write information to tensorboard
         norm = nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_norm'])
@@ -237,7 +237,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
     start = time.time()
     model.eval()
     dev_loss, d_dev_losses, mean_entropy = evaluation.evaluate_lpp(
-            model, z_discriminator, s_discriminators, test_data, sample_size, config)
+            model, s_discriminators, test_data, sample_size, config)
 
     writer.add_scalar('eval/loss', dev_loss, epoch)
     writer.add_scalar('stats/mean_entropy', mean_entropy, epoch)

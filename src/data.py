@@ -607,7 +607,7 @@ def minibatch(datasets, idx, batch_size, max_len, model_type, is_bt = False, is_
 
     # return ds order in back_translation regime, so these attrs can be extracted
     if is_bt:
-        return inputs, attribute, outputs, out_dataset_ordering
+        return inputs, attributes, outputs, out_dataset_ordering
     else:
         return inputs, attributes, outputs
 
