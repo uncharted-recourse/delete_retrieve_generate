@@ -246,7 +246,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
             writer.add_scalar('stats/lr', param_group['lr'], epoch)
         scheduler.step(dev_loss)
 
-        if z_discriminator is not None:
+        if s_discriminators is not None:
             [d_scheduler.step(d_loss) for d_scheduler, d_loss in zip(d_schedulers, d_dev_losses)]
             
              # write information to tensorboard

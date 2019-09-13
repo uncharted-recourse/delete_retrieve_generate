@@ -42,7 +42,7 @@ class LSTMEncoder(nn.Module):
             return h0, c0
 
 
-    def forward(self, src_embedding, srclens, srcmask, temp=1):
+    def forward(self, src_embedding, srclens):
         h0, c0 = self.init_state(src_embedding)
 
         if self.pack:

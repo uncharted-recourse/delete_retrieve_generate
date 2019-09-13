@@ -100,6 +100,42 @@ def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
         raise NotImplementedError("Learning scheduler not recommended for this task")
     return optimizer, scheduler
 
+def generate_soft_sequence(max_len, start_id, model, content_data, attr_data, temperature):
+    """ generate sequnce of prob. distributions over tokens to allow backprop through adversarial"""
+
+    src_input, _, srclens, srcmask, _ = content_data
+    aux_input, _, auxlens, auxmask, _ = attr_data
+
+    # Initialize target with start_id for every sentence
+    tgt_input = Variable(torch.LongTensor(
+        [
+            [start_id] for i in range(src_input.size(0))
+        ]
+    ))
+
+    # initialize target mask for Transformer decoder
+    tgt_mask = Variable(torch.LongTensor(
+        [
+            [1] for i in range(src_input.size(0))
+        ]
+    ))
+
+    if CUDA:
+        tgt_input = tgt_input.cuda()
+        tgt_mask = tgt_mask.cuda()
+
+    for i in range(max_len):
+        # run input through the model
+        t = time.time()
+        decoder_logit, _, decoder_states = model(src_input, tgt_input, 
+            srcmask, srclens, aux_input, auxmask, auxlens, tgt_mask)
+        log(f'one soft forward pass through the model took: {time.time() - t} seconds', level='info')   
+        # probability distribution is currently softmax(logits / temperature)
+        tgt_input = model.softmax(decoder_logit / temperature)
+        tgt_mask = srcmask[:, :i+1] # not sure how long the tgt_mask will be, so just copy srcmask
+    
+    return decoder_states
+
 def calculate_discriminator_loss(dataset, content_data, attr_data, idx, tokenizer, model,
                                 s_discriminators, config, decoder_states, sample_size, max_length):
     """ calculate discriminator loss over encoder states and tf decoder states vs. soft decoder states"""
@@ -110,14 +146,15 @@ def calculate_discriminator_loss(dataset, content_data, attr_data, idx, tokenize
         config['model']['model_type'], is_bt = True)
 
     # generate sequences to compare to teacher-forced outputs from above
-    _, generated_decoder_states = generate_sequences(
-        tokenizer,
+    input_lines_src, _, srclens, srcmask, _ = content_data
+    input_ids_aux, _, auxlens, auxmask, _ = attr_data
+    generated_decoder_states = generate_soft_sequence(
+        max_length,
+        data.get_start_id(tokenizer)
         model, 
-        config,
-        data.get_start_id(tokenizer),
-        data.get_stop_id(tokenizer),
         content_data, # this could also be new_content (they are the same)
         new_attr,
+        config['model']['temperature']
     )
     t1 = time.time()
     log(f'generating decoder states to different styles took: {t1 - t} seconds', level='info')
@@ -229,7 +266,7 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
                 bt_tgtlens, smooth=True)[0]
 
         # calculate discriminator loss if doing adversarial training
-        if z_discriminator is not None:
+        if s_discriminators is not None:
             bt_s_losses = calculate_discriminator_loss(dataset, src_packed, auxs_packed, batch_idx, tokenizer, 
                     model, s_discriminators, config, bt_decoder_states, sample_size, max_length)
             s_losses = [(bt_ratio * bt_s_loss + s_loss) / 2 for bt_s_loss, s_loss in zip(bt_s_losses, s_losses)]
@@ -257,9 +294,9 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
     ))
 
     # initialize target mask for Transformer decoder
-    tgt_mask = Variable(torch.LongTensor(
+    tgt_mask = Variable(torch.BoolTensor(
         [
-            [1] for i in range(src_input.size(0))
+            [False] for i in range(src_input.size(0))
         ]
     ))
 
@@ -276,7 +313,7 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
         # select the predicted "next" tokens, attach to target-side inputs
         next_preds = Variable(torch.from_numpy(decoder_argmax))
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
-        next_mask = [[0] if cur == [stop_id] or prev == [0] else [1] 
+        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] 
             for cur, prev in zip(decoder_argmax, prev_mask)]
         next_mask = Variable(torch.from_numpy(np.array(next_mask)))
         if CUDA:
@@ -285,8 +322,7 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
         tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
 
-    # return decoder_states (argmax sampling)
-    return tgt_input, decoder_states
+    return tgt_input
 
 def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     """ convert seqs to tokens"""
@@ -315,7 +351,7 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
     # decode dataset with greedy, beam search, or top k
     start_time = time.time()
     if config['model']['decode'] == 'greedy':
-        tgt_pred, decoder_states = decode_minibatch_greedy(
+        tgt_pred = decode_minibatch_greedy(
             config['data']['max_len'], start_id, stop_id, 
             model, input_lines_src, srclens, srcmask,
             input_ids_aux, auxlens, auxmask)
@@ -340,7 +376,7 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
     #     log(f'beam search decoding took: {time.time() - start_time}', level='debug')
     elif config['model']['decode'] == 'top_k':
         start_time = time.time()
-        tgt_pred, decoder_states = decode_top_k(
+        tgt_pred = decode_top_k(
             config['data']['max_len'], start_id, stop_id,
             model, input_lines_src, srclens, srcmask,
             input_ids_aux, auxlens, auxmask, 
@@ -351,7 +387,7 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
     else:
         raise Exception('Decoding method must be one of greedy or top_k')
 
-    return tgt_pred, decoder_states
+    return tgt_pred
 
 def decode_dataset(model, test_data, sample_size, num_samples, config):
     """Evaluate model on num_samples of size sample_size"""
@@ -377,7 +413,7 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
         
         # generate sequences according to decoding strategy
         tokenizer = test_data[0]['tokenizer']
-        tgt_pred, _ = generate_sequences(
+        tgt_pred = generate_sequences(
             tokenizer,
             model, 
             config,
@@ -417,7 +453,7 @@ def inference_metrics(model, test_data, sample_size, num_samples, config):
     return bleu, edit_distance, inputs, preds, ground_truths, auxs
 
 
-def evaluate_lpp(model, z_discriminator, s_discriminators, test_data, sample_size, config):
+def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
     """ evaluate log perplexity WITHOUT decoding
         (i.e., with teacher forcing)
     """
@@ -431,7 +467,7 @@ def evaluate_lpp(model, z_discriminator, s_discriminators, test_data, sample_siz
 
         loss_crit = config['training']['loss_criterion']
         combined_loss, s_losses, combined_mean_entropy = calculate_loss(test_data, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
-            config['model']['model_type'], model, z_discriminator, s_discriminators, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test=True)
+            config['model']['model_type'], model, s_discriminators, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test=True)
 
         loss_item = combined_loss.item() if loss_crit == 'cross_entropy' else -combined_loss.item()
         losses.append(loss_item)
@@ -593,9 +629,9 @@ def decode_top_k(
     ))
 
     # initialize target mask for Transformer decoder
-    tgt_mask = Variable(torch.LongTensor(
+    tgt_mask = Variable(torch.BoolTensor(
         [
-            [1] for i in range(src_input.size(0))
+            [False] for i in range(src_input.size(0))
         ]
     ))
 
@@ -621,7 +657,7 @@ def decode_top_k(
             sampled_indices = np.array([x[idx] for x,idx in zip(top_ids, inds)])
         next_preds = Variable(torch.from_numpy(sampled_indices))
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
-        next_mask = [[0] if cur == [stop_id] or prev == [0] else [1] 
+        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] 
             for cur, prev in zip(sampled_indices, prev_mask)]
         next_mask = Variable(torch.from_numpy(np.array(next_mask)))
         if CUDA:
@@ -630,8 +666,7 @@ def decode_top_k(
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
         tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
 
-    # return decoder_states (top_k sampling)
-    return tgt_input, decoder_states
+    return tgt_input
 
 class Beam(object):
     """ Beam object for beam search decoding"""

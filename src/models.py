@@ -208,7 +208,7 @@ class SeqModel(nn.Module):
         src_emb = self.src_embedding(input_src)
 
         if self.options['encoder'] == 'lstm':
-            src_outputs, (src_h_t, src_c_t) = self.encoder(src_emb, srclens, srcmask)
+            src_outputs, (src_h_t, src_c_t) = self.encoder(src_emb, srclens)
             if self.options['bidirectional']:
                 h_t_encoder = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
                 c_t_encoder = torch.cat((src_c_t[-1], src_c_t[-2]), 1)
@@ -221,6 +221,7 @@ class SeqModel(nn.Module):
             src_outputs_encoder = self.encoder(src_emb, srcmask)
             h_t_encoder = None
             c_t_encoder = None
+
         # # # #  # # # #  # #  # # # # # # #  # # seq2seq diff
         # join attribute with h/c then bridge 'em
         # TODO -- put this stuff in a method, overlaps w/above
@@ -237,7 +238,7 @@ class SeqModel(nn.Module):
                 a_ht = torch.unsqueeze(a_ht, 1)
                 src_outputs = torch.cat((a_ht, src_outputs_encoder), 1)
                 src_outputs = self.ctx_bridge(src_outputs)
-                a_mask = Variable(torch.BoolTensor([[False] for i in range(input_src.size(0))]))#.byte()
+                a_mask = Variable(torch.BoolTensor([[False] for i in range(input_src.size(0))]))
                 if CUDA:
                     a_mask = a_mask.cuda()
                 srcmask = torch.cat((a_mask, srcmask), dim = 1)
@@ -263,7 +264,13 @@ class SeqModel(nn.Module):
                 src_outputs = self.ctx_bridge(src_outputs)
 
         # # # #  # # # #  # #  # # # # # # #  # # end diff
-        tgt_emb = self.tgt_embedding(input_tgt)
+
+        # multiply input_tgt by embedding weights if input is probability distribution
+        if len(input_tgt.size()) == 3: # batch_size, seq_length, vocab_size
+            tgt_emb = torch.bmm(input_tgt, self.tgt_embedding.weight)
+        else:
+            tgt_emb = self.tgt_embedding(input_tgt)
+
         if self.options['decoder'] == 'lstm':
             tgt_outputs, _ = self.decoder(
                 tgt_emb,
@@ -278,12 +285,9 @@ class SeqModel(nn.Module):
                 tgtmask,
                 srcmask)
 
-        #print(f'src output: {src_outputs.size()}')
-        #print(f'tgt output: {tgt_outputs.size()}')
         tgt_outputs_reshape = tgt_outputs.contiguous().view(
             tgt_outputs.size()[0] * tgt_outputs.size()[1],
             tgt_outputs.size()[2])
-        #print(f'tgt output reshape: {tgt_outputs_reshape.size()}')
 
         decoder_logit = self.output_projection(tgt_outputs_reshape)
         decoder_logit = decoder_logit.view(
@@ -340,6 +344,8 @@ class FusedSeqModel(SeqModel):
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
 
         # generate predictions from language model
+
+        # TODO: subclass language model to take input_tgt as probability distribution
         lm_logit = self.language_model.forward(input_tgt)
 
         # generate s2s logits
