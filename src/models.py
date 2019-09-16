@@ -267,7 +267,7 @@ class SeqModel(nn.Module):
 
         # multiply input_tgt by embedding weights if input is probability distribution
         if len(input_tgt.size()) == 3: # batch_size, seq_length, vocab_size
-            tgt_emb = torch.bmm(input_tgt, self.tgt_embedding.weight)
+            tgt_emb = torch.matmul(input_tgt, self.tgt_embedding.weight)
         else:
             tgt_emb = self.tgt_embedding(input_tgt)
 
@@ -338,15 +338,15 @@ class FusedSeqModel(SeqModel):
             #self.multp = nn.Parameter(torch.rand(1))
         elif self.join_method == "gate":
             self.lm_sigmoid = nn.Sigmoid()
-        else:
-            raise Exception("join method must be 'gate' or 'add'")
+        elif self.join_method != 'post-norm':
+            raise Exception("join method must be 'gate', 'add', or 'post-norm'")
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
 
         # generate predictions from language model
 
         # TODO: subclass language model to take input_tgt as probability distribution
-        lm_logit = self.language_model.forward(input_tgt)
+        lm_logit = self.language_model.forward(input_tgt, attention_mask = ~tgtmask)
 
         # generate s2s logits
         s2s_logit, _, decoder_states = super(FusedSeqModel, self).forward(input_src,
@@ -361,13 +361,16 @@ class FusedSeqModel(SeqModel):
 
         # add or multiply projected logits
         if self.join_method == "add":
-            combined_logit = s2s_logit.add(lm_logit * self.multp.expand_as(lm_logit))
+            combined = s2s_logit.add(lm_logit * self.multp.expand_as(lm_logit))
+            probs = self.softmax(combined)
         elif self.join_method == 'gate':
-            combined_logit = s2s_logit * self.lm_sigmoid(lm_logit)
+            combined = s2s_logit * self.lm_sigmoid(lm_logit)
+            probs = self.softmax(combined)
+        elif self.join_method == 'post-norm':
+            combined = self.softmax(s2s_logit) * self.softmax(lm_logit)
+            probs = self.softmax(combined)
 
-        probs = self.softmax(combined_logit)
-
-        return combined_logit, probs, decoder_states
+        return combined, probs, decoder_states # in post-norm combined is no longer logits
 
     def count_params(self):
         return super(FusedSeqModel, self).count_params()

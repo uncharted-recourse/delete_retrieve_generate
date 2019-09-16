@@ -66,7 +66,7 @@ class ConvNet(nn.Module):
     """ wrapper for a relatively simple CNN 
 
         num_classes = number of classes CNN should discriminate between
-        num_channels = list of output channels for each conv layer
+        num_channels = list of output channels for each conv layer. input channels to first layer = max_length
         kernel_sizes = list of kernel sizes for each conv layer
         conv_dim = dimension of CNN input, can be 1 or 2
         """
@@ -74,7 +74,7 @@ class ConvNet(nn.Module):
         
         super(ConvNet, self).__init__()
 
-        inp_channels = [1]
+        inp_channels = [max_length]
         inp_channels += num_channels[:-1]
         layers = [CNNSequentialBlock(in_c, out_c, kernels, conv_dim, pooling_stride) for 
             in_c, out_c, kernels in zip(inp_channels, num_channels, kernel_sizes)]
@@ -82,13 +82,12 @@ class ConvNet(nn.Module):
         
         # construct fully connected layer based on reduction dimensions
         reduce_factor = pooling_stride ** len(layers) 
-        max_length = max_length // reduce_factor if max_length != 1 else max_length
-        fc_in_dim = int(num_channels[-1] * max_length * (hidden_dim // reduce_factor))
+        fc_in_dim = int(num_channels[-1] * (hidden_dim // reduce_factor))
         self.fc = nn.Linear(fc_in_dim, num_classes)
  
     def forward(self, content):
         # resize input for first convolutional block 
-        content = torch.unsqueeze(content, 1)
+        #content = torch.unsqueeze(content, 1)
         out = self.conv_blocks(content)
         # resize appropriately for fully connected layer
         out = out.reshape(out.size(0), -1)
@@ -127,13 +126,13 @@ def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, o
     s_discriminators = [ConvNet(
         num_classes = 2, 
         num_channels = [2,4], 
-        kernel_sizes = [5,5], 
-        conv_dim = 2, 
+        kernel_sizes = [32,64], 
+        conv_dim = 1, 
         pooling_stride = 4,
         max_length = max_length_s,
         hidden_dim = hidden_dim
         ) for _ in range(0, n_styles)]
-
+    print(f'max len s: {max_length_s}')
     # trainable, untrainable = z_discriminator.count_params()
     # logging.info(f'Z discriminator has {trainable} trainable params and {untrainable} untrainable params')
     trainable, untrainable = s_discriminators[0].count_params()
@@ -194,17 +193,17 @@ class LanguageModel(nn.Module):
             raise Exception("Language model must be one of 'gpt', 'gpt2'")#, 'xlnet', 'transformerxl'")
 
         # !! assume that language model and seq2seq are using same tokenization !!
-        self.language_model = models[model_name].from_pretrained(model_weights[model_name], 
+        self.lang_model = models[model_name].from_pretrained(model_weights[model_name], 
             cache_dir=cache_dir
         )
 
         # resize token embeddings if vocabulary has been augmented with special tokens
-        self.language_model.resize_token_embeddings(tgt_vocab_size)
-
+        self.lang_model.resize_token_embeddings(tgt_vocab_size)
         # finetune if desired
+
         if not finetune:
-            for param in self.language_model.parameters():
+            for param in self.lang_model.parameters():
                 param.requires_grad = False
 
-    def forward(self, input_tgt):
-        return self.language_model(input_tgt)[0]
+    def forward(self, input_tgt, attention_mask = None):
+        return self.lang_model(input_tgt, attention_mask)[0]
