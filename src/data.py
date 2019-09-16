@@ -535,7 +535,7 @@ def minibatch(datasets, idx, batch_size, max_len, model_type, is_bt = False, is_
         input_idx = idx
         for i in range(n_styles):
             if is_bt: # backtranslation randomly sample different intermediate style
-                tgt_idx = i
+                tgt_idx = random.randint(0, n_styles - 1)
                 # could do this more efficiently by sampling whole permutation
                 while tgt_idx == i or tgt_idx in out_dataset_ordering:
                     tgt_idx = random.randint(0, n_styles - 1)

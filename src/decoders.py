@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+from src.cuda import CUDA
 
 class BilinearAttention(nn.Module):
     """ bilinear attention layer: score(H_j, q) = H_j^T W_a q
@@ -33,7 +34,6 @@ class BilinearAttention(nn.Module):
         # [Batch, Source length]
         attn_scores = torch.bmm(keys, decoder_hidden).squeeze(2)
         if srcmask is not None:
-            srcmask = srcmask.byte()
             attn_scores = attn_scores.masked_fill(srcmask, -float('inf'))
             
         attn_probs = self.softmax(attn_scores)
@@ -151,7 +151,11 @@ class TransformerDecoder(nn.Module):
         r""" Pass the inputs (and masks) through each decoder layer in turn"""
         # generate square padding masks so that only positions before i can influence attention op
         src_position_mask = self.generate_square_subsequent_mask(encoder_output.size(1))
-        tgt_position_mask = self.generate_square_subsequent_mask(self.emb_dim)
+        src_position_mask = src_position_mask[:tgt_embedding.size(1)]
+        tgt_position_mask = self.generate_square_subsequent_mask(tgt_embedding.size(1)) 
+        if CUDA:
+            src_position_mask = src_position_mask.cuda()
+            tgt_position_mask = tgt_position_mask.cuda()
 
         return self.transformer_decoder.forward(
             tgt_embedding.transpose(0,1), 
@@ -159,7 +163,7 @@ class TransformerDecoder(nn.Module):
             tgt_key_padding_mask = tgtmask, 
             memory_key_padding_mask = srcmask,
             tgt_mask = tgt_position_mask,
-            memory_mask = tgt_position_mask
+            memory_mask = src_position_mask
         ).transpose(0,1)
 
     def generate_square_subsequent_mask(self, sz):

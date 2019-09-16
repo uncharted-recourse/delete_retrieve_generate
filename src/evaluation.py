@@ -100,18 +100,17 @@ def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
         raise NotImplementedError("Learning scheduler not recommended for this task")
     return optimizer, scheduler
 
-def generate_soft_sequence(max_len, start_id, model, content_data, attr_data, temperature):
+def generate_soft_sequence(max_len, start_id, model, content_data, attr_data, temperature, vocab_size):
     """ generate sequnce of prob. distributions over tokens to allow backprop through adversarial"""
 
     src_input, _, srclens, srcmask, _ = content_data
     aux_input, _, auxlens, auxmask, _ = attr_data
 
     # Initialize target with start_id for every sentence
-    tgt_input = Variable(torch.LongTensor(
-        [
-            [start_id] for i in range(src_input.size(0))
-        ]
-    ))
+    # start id must be dummy prob_dist over vocab_size
+    start_token = torch.zeros(src_input.size(0), 1, vocab_size, dtype = torch.float)
+    start_token[:, :, start_id] = 1
+    tgt_input = start_token
 
     # initialize target mask for Transformer decoder
     tgt_mask = Variable(torch.LongTensor(
@@ -121,17 +120,15 @@ def generate_soft_sequence(max_len, start_id, model, content_data, attr_data, te
     ))
 
     if CUDA:
+        start_token = start_token.cuda()
         tgt_input = tgt_input.cuda()
         tgt_mask = tgt_mask.cuda()
-
     for i in range(max_len):
         # run input through the model
-        t = time.time()
         decoder_logit, _, decoder_states = model(src_input, tgt_input, 
             srcmask, srclens, aux_input, auxmask, auxlens, tgt_mask)
-        log(f'one soft forward pass through the model took: {time.time() - t} seconds', level='info')   
         # probability distribution is currently softmax(logits / temperature)
-        tgt_input = model.softmax(decoder_logit / temperature)
+        tgt_input = torch.cat((start_token, model.softmax(decoder_logit / temperature)), dim=1)
         tgt_mask = srcmask[:, :i+1] # not sure how long the tgt_mask will be, so just copy srcmask
     
     return decoder_states
@@ -150,14 +147,15 @@ def calculate_discriminator_loss(dataset, content_data, attr_data, idx, tokenize
     input_ids_aux, _, auxlens, auxmask, _ = attr_data
     generated_decoder_states = generate_soft_sequence(
         max_length,
-        data.get_start_id(tokenizer)
+        data.get_start_id(tokenizer), 
         model, 
         content_data, # this could also be new_content (they are the same)
         new_attr,
-        config['model']['temperature']
+        config['model']['temperature'],
+        len(tokenizer)
     )
     t1 = time.time()
-    log(f'generating decoder states to different styles took: {t1 - t} seconds', level='info')
+    log(f'generating decoder states to different styles took: {t1 - t} seconds', level='debug')
 
     # shuffle decoder states according to sampled minibatch ordering
     shuffled_order = [i for j in out_dataset_ordering for i in range(j * sample_size, (j+1) * sample_size)]
@@ -171,7 +169,7 @@ def calculate_discriminator_loss(dataset, content_data, attr_data, idx, tokenize
         gen_decoder_states_sample = generated_decoder_states[i * sample_size:(i+1) * sample_size]
         s_outputs.append(s_discriminators[i].forward(torch.cat((decoder_states_sample, gen_decoder_states_sample), dim=0)))
     t2 = time.time()
-    log(f'forward pass through discriminators took: {t2 - t1} seconds', level='info')
+    log(f'forward pass through discriminators took: {t2 - t1} seconds', level='debug')
 
     # calculate cross entropy loss over discriminators
     loss_criterion_d = nn.CrossEntropyLoss()
@@ -182,7 +180,7 @@ def calculate_discriminator_loss(dataset, content_data, attr_data, idx, tokenize
         decoder_labels = decoder_labels.cuda()
     s_losses = [loss_criterion_d(style_output, decoder_labels) for style_output in s_outputs]
     t3 = time.time()
-    log(f'calculating loss on discriminators took: {t3 - t2} seconds', level='info')
+    log(f'calculating loss on discriminators took: {t3 - t2} seconds', level='debug')
 
     return s_losses
 
@@ -235,8 +233,9 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
 
     # calculate discriminator loss if doing adversarial training, 
     if s_discriminators is not None:
+        batch_len = len(src_packed[0]) // n_styles
         s_losses = calculate_discriminator_loss(dataset, src_packed, auxs_packed, batch_idx, tokenizer, 
-                model, s_discriminators, config, decoder_states, sample_size, max_length)
+                model, s_discriminators, config, decoder_states, batch_len, max_length)
         loss = loss - config['training']['discriminator_ratio'] * sum(s_losses)
     else: 
         s_losses = None
@@ -355,7 +354,7 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
             config['data']['max_len'], start_id, stop_id, 
             model, input_lines_src, srclens, srcmask,
             input_ids_aux, auxlens, auxmask)
-        log(f'greedy search decoding took: {time.time() - start_time}', level='info')
+        log(f'greedy search decoding took: {time.time() - start_time}', level='debug')
     # elif config['model']['decode'] == 'beam_search':
     #     start_time = time.time()
     #     if config['model']['model_type'] == 'delete_retrieve':
@@ -382,7 +381,7 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
             input_ids_aux, auxlens, auxmask, 
             config['model']['k'], config['model']['temperature']
         )
-        log(f'top k decoding took: {time.time() - start_time}', level='info')
+        log(f'top k decoding took: {time.time() - start_time}', level='debug')
 
     else:
         raise Exception('Decoding method must be one of greedy or top_k')
@@ -473,7 +472,7 @@ def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
         losses.append(loss_item)
 
         if s_losses is not None: 
-            [d_loss.append(s_loss.item()) for d_loss, s_loss in zip(d_losses, s_los_losses)]
+            [d_loss.append(s_loss.item()) for d_loss, s_loss in zip(d_losses, s_losses)]
             d_means = [np.mean(d_loss) for d_loss in d_losses]
         else:
             d_means = None
