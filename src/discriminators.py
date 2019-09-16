@@ -7,9 +7,6 @@ from src.cuda import CUDA
 import logging
 import numpy as np
 
-# L_z - aligns latent state z 
-    # inputs = final hidden states of encoder for each style s
-
 # L_s - discriminate between G(z, s) and G(z,s) ??
     # inputs = final unrolled hidden states of decoder on generated x_s and 
     # hidden states on x (teacher forced according to actual words)
@@ -178,7 +175,7 @@ class LanguageModel(nn.Module):
         super(LanguageModel, self).__init__()
 
         models = {
-            'gpt': OpenAIGPTLMHeadModel, 
+            'gpt': OpenAIGPTLMHeadModelAdversarial, 
             'gpt2': GPT2LMHeadModel, 
             #'xlnet': XLNetLMHeadModel,
             #'transformerxl': TransfoXLLMHeadModel
@@ -208,3 +205,101 @@ class LanguageModel(nn.Module):
 
     def forward(self, input_tgt):
         return self.language_model(input_tgt)[0]
+
+class OpenAIGPTModelAdversarial(OpenAIGPTModel):
+    """ this class inherits from OpenAIGPTModel, but supports either discrete token ids as lookups to embedding layer 
+        or continuous distributions over tokens to matmul with embedding weights"""
+
+    def __init__(self, *args):
+        super(OpenAIGPTModelAdversarial, self).__init__(*args)
+
+    def _resize_token_embeddings(self, *args):
+        super(OpenAIGPTModelAdversarial, self)._resize_token_embeddings(*args)
+
+    def _prune_heads(self, *args):
+        super(OpenAIGPTModelAdversarial, self)._prune_heads(*args)
+
+    def forward(self, input_ids, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None)
+        # full documentation of this function can be found here 
+        # https://huggingface.co/pytorch-transformers/_modules/pytorch_transformers/modeling_openai.html#OpenAIGPTModel
+
+        if position_ids is None:
+            position_ids = torch.arange(input_ids.size(-1), dtype=torch.long, device=input_ids.device)
+            position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
+
+        if attention_mask is not None:
+            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+            attention_mask = attention_mask.to(dtype=next(self.parameters()).dtype) # fp16 compatibility
+            attention_mask = (1.0 - attention_mask) * -10000.0
+
+        # Prepare head mask if needed
+        if head_mask is not None:
+            if head_mask.dim() == 1:
+                head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+                head_mask = head_mask.expand(self.config.n_layer, -1, -1, -1, -1)
+            elif head_mask.dim() == 2:
+                head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)  # We can specify head_mask for each layer
+            head_mask = head_mask.to(dtype=next(self.parameters()).dtype) # switch to fload if need + fp16 compatibility
+        else:
+            head_mask = [None] * self.config.n_layer
+
+        input_shape = input_ids.size()
+        input_ids = input_ids.view(-1, input_ids.size(-1))
+        position_ids = position_ids.view(-1, position_ids.size(-1))
+
+        # EDITED: multiply input_ids by embedding weights if input is probability distribution
+        if len(input_ids.size()) == 3: # batch_size, seq_length, vocab_size
+            inputs_embeds = torch.bmm(input_ids, self.tgt_embedding.weight)
+        else:
+            tgt_emb = self.tokens_embed(input_ids)
+
+        position_embeds = self.positions_embed(position_ids)
+        if token_type_ids is not None:
+            token_type_ids = token_type_ids.view(-1, token_type_ids.size(-1))
+            token_type_embeds = self.tokens_embed(token_type_ids)
+        else:
+            token_type_embeds = 0
+        hidden_states = inputs_embeds + position_embeds + token_type_embeds
+        hidden_states = self.drop(hidden_states)
+
+        output_shape = input_shape + (hidden_states.size(-1),)
+
+        all_attentions = ()
+        all_hidden_states = ()
+        for i, block in enumerate(self.h):
+            if self.output_hidden_states:
+                all_hidden_states = all_hidden_states + (hidden_states.view(*output_shape),)
+
+            outputs = block(hidden_states, attention_mask, head_mask[i])
+            hidden_states = outputs[0]
+            if self.output_attentions:
+                all_attentions = all_attentions + (outputs[1],)
+
+        # Add last layer
+        if self.output_hidden_states:
+            all_hidden_states = all_hidden_states + (hidden_states.view(*output_shape),)
+
+        outputs = (hidden_states.view(*output_shape),)
+        if self.output_hidden_states:
+            outputs = outputs + (all_hidden_states,)
+        if self.output_attentions:
+            outputs = outputs + (all_attentions,)
+        return outputs  # last hidden state, (all hidden states), (all attentions)
+
+class OpenAIGPTLMHeadModelAdversarial(OpenAIGPTLMHeadModel):
+    """ this class inherits from OpenAIGPTLMHeadModel, but supports either discrete token ids as lookups to embedding layer 
+    or continuous distributions over tokens to matmul with embedding weights"""
+
+    def __init__(self, config):
+        super(OpenAIGPTLMHeadModelAdversarial, self).__init__(config)
+        self.transformer = OpenAIGPTModelAdversarial(config)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+        self.init_weights()
+        self.tie_weights()
+    
+    def tie_weights(self):
+        super(OpenAIGPTLMHeadModelAdversarial, self).tie_weights()
+    
+    def forward(self, *args, **kwargs):
+        super(OpenAIGPTLMHeadModelAdversarial, self).forward(*args, **kwargs)
