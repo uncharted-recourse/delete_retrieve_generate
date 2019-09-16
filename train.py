@@ -187,7 +187,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
             bp_t = time.time()
             [evaluation.backpropagation_step(l, opt, retain_graph=True) for l, opt in zip(s_losses, d_optimizers)]
             bp_t1 = time.time()
-            logging.info(f'backpropagation through discriminators took: {bp_t1 - bp_t} seconds')
+            logging.debug(f'backpropagation through discriminators took: {bp_t1 - bp_t} seconds')
 
             if scheduler_name == 'cyclic':
                 [d_scheduler.step() for scheduler in d_schedulers]
@@ -203,7 +203,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         bp_t = time.time()
         evaluation.backpropagation_step(train_loss, optimizer, retain_graph = False)
         bp_t1 = time.time()
-        logging.info(f'backpropagation through S2S took: {bp_t1 - bp_t} seconds')
+        logging.debug(f'backpropagation through S2S took: {bp_t1 - bp_t} seconds')
         
         # write information to tensorboard
         norm = nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_norm'])

@@ -344,7 +344,6 @@ class FusedSeqModel(SeqModel):
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
 
         # generate predictions from language model
-
         # TODO: subclass language model to take input_tgt as probability distribution
         lm_logit = self.language_model.forward(input_tgt, attention_mask = ~tgtmask)
 

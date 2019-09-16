@@ -115,7 +115,7 @@ def generate_soft_sequence(max_len, start_id, model, content_data, attr_data, te
     # initialize target mask for Transformer decoder
     tgt_mask = Variable(torch.LongTensor(
         [
-            [1] for i in range(src_input.size(0))
+            [False] for i in range(src_input.size(0))
         ]
     ))
 
@@ -129,7 +129,7 @@ def generate_soft_sequence(max_len, start_id, model, content_data, attr_data, te
             srcmask, srclens, aux_input, auxmask, auxlens, tgt_mask)
         # probability distribution is currently softmax(logits / temperature)
         tgt_input = torch.cat((start_token, model.softmax(decoder_logit / temperature)), dim=1)
-        tgt_mask = srcmask[:, :i+1] # not sure how long the tgt_mask will be, so just copy srcmask
+        tgt_mask = srcmask[:, :i+2] # not sure how long the tgt_mask will be, so just copy srcmask
     
     return decoder_states
 

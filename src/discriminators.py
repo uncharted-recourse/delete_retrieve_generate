@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from pytorch_transformers import OpenAIGPTLMHeadModel, GPT2LMHeadModel#, XLNetLMHeadModel, TransfoXLLMHeadModel
+from pytorch_transformers import OpenAIGPTModel, OpenAIGPTLMHeadModel, GPT2LMHeadModel#, XLNetLMHeadModel, TransfoXLLMHeadModel
 import torch.optim as optim
 from src import models
 from src.cuda import CUDA
@@ -129,7 +129,6 @@ def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, o
         max_length = max_length_s,
         hidden_dim = hidden_dim
         ) for _ in range(0, n_styles)]
-    print(f'max len s: {max_length_s}')
     # trainable, untrainable = z_discriminator.count_params()
     # logging.info(f'Z discriminator has {trainable} trainable params and {untrainable} untrainable params')
     trainable, untrainable = s_discriminators[0].count_params()
@@ -202,8 +201,8 @@ class LanguageModel(nn.Module):
             for param in self.lang_model.parameters():
                 param.requires_grad = False
 
-    def forward(self, input_tgt):
-        return self.language_model(input_tgt)[0]
+    def forward(self, input_tgt, attention_mask = None):
+        return self.lang_model(input_tgt, attention_mask = attention_mask)[0]
 
 class OpenAIGPTModelAdversarial(OpenAIGPTModel):
     """ this class inherits from OpenAIGPTModel, but supports either discrete token ids as lookups to embedding layer 
@@ -218,14 +217,13 @@ class OpenAIGPTModelAdversarial(OpenAIGPTModel):
     def _prune_heads(self, *args):
         super(OpenAIGPTModelAdversarial, self)._prune_heads(*args)
 
-    def forward(self, input_ids, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None)
+    def forward(self, input_ids, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None):
         # full documentation of this function can be found here 
         # https://huggingface.co/pytorch-transformers/_modules/pytorch_transformers/modeling_openai.html#OpenAIGPTModel
 
         if position_ids is None:
-            position_ids = torch.arange(input_ids.size(-1), dtype=torch.long, device=input_ids.device)
-            position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
-
+            position_ids = torch.arange(input_ids.size(1), dtype=torch.long, device=input_ids.device)
+            position_ids = position_ids.unsqueeze(0).expand(input_ids.size(0), -1)
         if attention_mask is not None:
             attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
             attention_mask = attention_mask.to(dtype=next(self.parameters()).dtype) # fp16 compatibility
@@ -243,14 +241,13 @@ class OpenAIGPTModelAdversarial(OpenAIGPTModel):
             head_mask = [None] * self.config.n_layer
 
         input_shape = input_ids.size()
-        input_ids = input_ids.view(-1, input_ids.size(-1))
-        position_ids = position_ids.view(-1, position_ids.size(-1))
 
         # EDITED: multiply input_ids by embedding weights if input is probability distribution
-        if len(input_ids.size()) == 3: # batch_size, seq_length, vocab_size
-            inputs_embeds = torch.matmul(input_ids, self.tgt_embedding.weight)
+        if len(input_shape) == 3: # batch_size, seq_length, vocab_size
+            inputs_embeds = torch.matmul(input_ids, self.tokens_embed.weight)
         else:
-            tgt_emb = self.tokens_embed(input_ids)
+            #input_ids = input_ids.view(-1, input_ids.size(-1))
+            inputs_embeds = self.tokens_embed(input_ids)
 
         position_embeds = self.positions_embed(position_ids)
         if token_type_ids is not None:
@@ -258,11 +255,12 @@ class OpenAIGPTModelAdversarial(OpenAIGPTModel):
             token_type_embeds = self.tokens_embed(token_type_ids)
         else:
             token_type_embeds = 0
+        
         hidden_states = inputs_embeds + position_embeds + token_type_embeds
         hidden_states = self.drop(hidden_states)
-
-        output_shape = input_shape + (hidden_states.size(-1),)
-
+ 
+        output_shape = inputs_embeds.shape
+        #output_shape = input_shape + (hidden_states.size(-1),)
         all_attentions = ()
         all_hidden_states = ()
         for i, block in enumerate(self.h):
@@ -292,13 +290,9 @@ class OpenAIGPTLMHeadModelAdversarial(OpenAIGPTLMHeadModel):
     def __init__(self, config):
         super(OpenAIGPTLMHeadModelAdversarial, self).__init__(config)
         self.transformer = OpenAIGPTModelAdversarial(config)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-        self.init_weights()
-        self.tie_weights()
-    
     def tie_weights(self):
         super(OpenAIGPTLMHeadModelAdversarial, self).tie_weights()
     
     def forward(self, *args, **kwargs):
-        super(OpenAIGPTLMHeadModelAdversarial, self).forward(*args, **kwargs)
+        return super(OpenAIGPTLMHeadModelAdversarial, self).forward(*args, **kwargs)
