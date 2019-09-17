@@ -105,7 +105,7 @@ np.random.seed(config['training']['random_seed'])
 writer = SummaryWriter(working_dir)
 
 # define and load model
-model = models.FusedSeqModel(
+model = models.SeqModel(
    src_vocab_size=src_vocab_size,
    tgt_vocab_size=tgt_vocab_size,
    pad_id_src=padding_id,
