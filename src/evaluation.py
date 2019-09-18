@@ -130,7 +130,7 @@ def generate_soft_sequence(max_len, start_id, model, content_data, attr_data, te
         # probability distribution is currently softmax(logits / temperature)
         tgt_input = torch.cat((start_token, model.softmax(decoder_logit / temperature)), dim=1)
         tgt_mask = srcmask[:, :i+2] # not sure how long the tgt_mask will be, so just copy srcmask
-    
+ 
     return decoder_states
 
 def calculate_discriminator_loss(dataset, style_ids, n_styles, content_data, attr_data, idx, tokenizer, model,
