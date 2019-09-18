@@ -113,7 +113,7 @@ def generate_soft_sequence(max_len, start_id, model, content_data, attr_data, te
     tgt_input = start_token
 
     # initialize target mask for Transformer decoder
-    tgt_mask = Variable(torch.LongTensor(
+    tgt_mask = Variable(torch.BoolTensor(
         [
             [False] for i in range(src_input.size(0))
         ]
@@ -133,14 +133,14 @@ def generate_soft_sequence(max_len, start_id, model, content_data, attr_data, te
     
     return decoder_states
 
-def calculate_discriminator_loss(dataset, content_data, attr_data, idx, tokenizer, model,
+def calculate_discriminator_loss(dataset, style_ids, n_styles, content_data, attr_data, idx, tokenizer, model,
                                 s_discriminators, config, decoder_states, sample_size, max_length):
     """ calculate discriminator loss over encoder states and tf decoder states vs. soft decoder states"""
 
     t = time.time()
-    # sample minibatch from bt paradigm (next style for now)
-    new_content, new_attr, _, out_dataset_ordering = data.minibatch(dataset, idx, sample_size, max_length, 
-        config['model']['model_type'], is_bt = True)
+    # sample minibatch from bt paradigm
+    new_content, new_attr, _, out_dataset_ordering = data.minibatch(dataset, style_ids, n_styles, idx, sample_size, max_length, 
+        config['model']['model_type'], is_adv = True)
 
     # generate sequences to compare to teacher-forced outputs from above
     input_lines_src, _, srclens, srcmask, _ = content_data
@@ -184,12 +184,11 @@ def calculate_discriminator_loss(dataset, content_data, attr_data, idx, tokenize
 
     return s_losses
 
-def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length, model_type, model, 
+def calculate_loss(dataset, style_ids, n_styles, config, batch_idx, sample_size, max_length, model_type, model, 
                     s_discriminators, loss_crit = 'cross_entropy', bt_ratio = 1, is_test = False):
     """ sample minibatch, pass minibatch through model, calculate loss and entropy according to config"""
 
-    # sample even number of samples from each corpus according to batch size, 
-    src_packed, auxs_packed, tgt_packed = data.minibatch(dataset, batch_idx, 
+    src_packed, auxs_packed, tgt_packed = data.minibatch(dataset, style_ids, n_styles, batch_idx, 
         sample_size, max_length, model_type, is_test = is_test)
     input_lines_src, _, srclens, srcmask, _ = src_packed
     input_ids_aux, _, auxlens, auxmask, _ = auxs_packed
@@ -225,17 +224,17 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
         # calculate lb expected bleu loss with max_order ngrams of 4 independent of ngram_range in config
         # decoder_logit.size()[1] is the max_length of a sequence for a given batch of translations
         loss = expected_bleu(decoder_probs, output_lines_tgt.cpu(), 
-            torch.LongTensor([decoder_logit.size()[1]] * sample_size * n_styles),
+            torch.LongTensor([decoder_logit.size()[1]] * sample_size * len(style_ids)),
             tgtlens, smooth=True)[0]
 
     # mean entropy
-    mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
+    #mean_entropy = mean_masked_entropy(decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
 
     # calculate discriminator loss if doing adversarial training, 
     if s_discriminators is not None:
-        batch_len = len(src_packed[0]) // n_styles
-        s_losses = calculate_discriminator_loss(dataset, src_packed, auxs_packed, batch_idx, tokenizer, 
-                model, s_discriminators, config, decoder_states, batch_len, max_length)
+        batch_len = len(src_packed[0]) // len(style_ids)
+        s_losses = calculate_discriminator_loss(dataset, style_ids, n_styles, src_packed, auxs_packed, 
+                batch_idx, tokenizer, model, s_discriminators, config, decoder_states, batch_len, max_length)
         loss = loss - config['training']['discriminator_ratio'] * sum(s_losses)
     else: 
         s_losses = None
@@ -243,8 +242,8 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
     # get backtranslation minibatch (BT should be turned off for evaluation)
     if bt_ratio > 0 and not is_test:
 
-        src_packed, auxs_packed, tgt_packed = data.back_translation_minibatch(dataset, batch_idx, 
-            sample_size, max_length, model_type, is_bt = True)
+        src_packed, auxs_packed, tgt_packed = data.back_translation_minibatch(dataset, style_ids, 
+            n_styles, config, batch_idx, sample_size, max_length, model, model_type)
         bt_input_lines_src, _, bt_srclens, bt_srcmask, _ = src_packed
         bt_input_ids_aux, _, bt_auxlens, bt_auxmask, _ = auxs_packed
         bt_input_lines_tgt, bt_output_lines_tgt, bt_tgtlens, bt_tgtmask, _ = tgt_packed
@@ -261,13 +260,13 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
             )
         else:
             bt_loss = expected_bleu(bt_decoder_probs, bt_output_lines_tgt.cpu(), 
-                torch.LongTensor([bt_decoder_logit.size()[1]] * sample_size * n_styles),
+                torch.LongTensor([bt_decoder_logit.size()[1]] * sample_size * len(style_ids)),
                 bt_tgtlens, smooth=True)[0]
 
         # calculate discriminator loss if doing adversarial training
         if s_discriminators is not None:
-            bt_s_losses = calculate_discriminator_loss(dataset, src_packed, auxs_packed, batch_idx, tokenizer, 
-                    model, s_discriminators, config, bt_decoder_states, sample_size, max_length)
+            bt_s_losses = calculate_discriminator_loss(dataset, style_ids, n_styles, src_packed, auxs_packed, 
+                    batch_idx, tokenizer, model, s_discriminators, config, bt_decoder_states, sample_size, max_length)
             s_losses = [(bt_ratio * bt_s_loss + s_loss) / 2 for bt_s_loss, s_loss in zip(bt_s_losses, s_losses)]
             bt_loss = bt_loss - config['training']['discriminator_ratio'] * sum(s_losses)
 
@@ -275,11 +274,11 @@ def calculate_loss(dataset, n_styles, config, batch_idx, sample_size, max_length
         loss = (bt_ratio * bt_loss + loss) / 2
 
         # mean entropy
-        bt_mean_entropy = mean_masked_entropy(bt_decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
-        mean_entropy = (bt_ratio * bt_mean_entropy + mean_entropy) / 2
+        #bt_mean_entropy = mean_masked_entropy(bt_decoder_probs.data.cpu().numpy(), weight_mask.data.cpu().numpy, padding_id)
+        #mean_entropy = (bt_ratio * bt_mean_entropy + mean_entropy) / 2
  
     # return combined loss, discrim loss, and combined mean entropy  
-    return loss, s_losses, mean_entropy
+    return loss, s_losses#, mean_entropy
 
 def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclens, srcmask,
         aux_input, auxlens, auxmask):
@@ -397,6 +396,7 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
     ground_truths = []
 
     content_lengths = [len(datum['content']) for datum in test_data]
+    style_ids = [i for i in range(len(content_lengths))]
     min_content_length = min(content_lengths)
     upper_lim = min(min_content_length, num_samples * sample_size)
     for j in range(0, upper_lim, sample_size):
@@ -404,7 +404,7 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
         sys.stdout.flush()
 
         # get batch
-        src_packed, auxs_packed, tgt_packed = data.minibatch(test_data, j, 
+        src_packed, auxs_packed, tgt_packed = data.minibatch(test_data, j, style_ids, len(content_lengths), 
             sample_size, config['data']['max_len'], config['model']['model_type'], is_test = True)
         _, output_lines_src, _, _, indices = src_packed
         input_ids_aux, _, _, _, _ = auxs_packed
@@ -459,13 +459,14 @@ def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
     losses = []
     d_losses = [[]]
     content_lengths = [len(datum['content']) for datum in test_data]
+    style_ids = [i for i in range(len(content_lengths))]
     min_content_length = min(content_lengths)
     for j in range(0, min_content_length, sample_size):
         sys.stdout.write("\r%s/%s..." % (j, min_content_length))
         sys.stdout.flush()
 
         loss_crit = config['training']['loss_criterion']
-        combined_loss, s_losses, combined_mean_entropy = calculate_loss(test_data, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
+        combined_loss, s_losses = calculate_loss(test_data, style_ids, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
             config['model']['model_type'], model, s_discriminators, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test=True)
 
         loss_item = combined_loss.item() if loss_crit == 'cross_entropy' else -combined_loss.item()
@@ -476,10 +477,12 @@ def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
             d_means = [np.mean(d_loss) for d_loss in d_losses]
         else:
             d_means = None
-    return np.mean(losses), d_means, combined_mean_entropy
+    return np.mean(losses), d_means
 
 def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True, remove_attributes = True):
-    
+    """ translate input sequence (not in train / test corpora) to another style (s). 
+        we don't apply noising strategy to this input (should we??)
+    """
     start_time = time.time()
 
     # tokenize input data using cached tokenizer and attribute vocab

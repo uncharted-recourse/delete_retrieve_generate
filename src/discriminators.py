@@ -28,7 +28,7 @@ import numpy as np
 class CNNSequentialBlock(nn.Module):
     """ 
         Defines a sequential block for the CNN: convolution, batch norm, relu, maxpooling
-        Necessary for pytorch recognize parameters in list
+        Necessary for pytorch to recognize parameters in list
 
         in_channels = input channels for conv layer
         out_channels = output channels for conv layer
@@ -83,8 +83,6 @@ class ConvNet(nn.Module):
         self.fc = nn.Linear(fc_in_dim, num_classes)
  
     def forward(self, content):
-        # resize input for first convolutional block 
-        #content = torch.unsqueeze(content, 1)
         out = self.conv_blocks(content)
         # resize appropriately for fully connected layer
         out = out.reshape(out.size(0), -1)
@@ -103,7 +101,7 @@ class ConvNet(nn.Module):
         return n_trainable_params, n_untrainable_params
 
 def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, optimizer_type, scheduler_type):
-    """ Defines z and style discriminators, optimizers, and schedulers"""
+    """ Defines style discriminators, optimizers, and schedulers"""
 
     # z discriminator discriminates between z encoder final hidden state (lstm) 
     # or encoder output (transformer) from n styles
@@ -139,7 +137,8 @@ def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, o
     #     checkpoint_dir=working_dir)
     s_discriminators = [models.attempt_load_model(
         model=s_discriminator,
-        checkpoint_dir=working_dir)[0] for s_discriminator in s_discriminators]
+        checkpoint_dir=working_dir,
+        model_type=f's_discriminator_{idx}')[0] for idx, s_discriminator in enumerate(s_discriminators)]
     if CUDA:
         # z_discriminator = z_discriminator.cuda()
         s_discriminators = [s_discriminator.cuda() for s_discriminator in s_discriminators]

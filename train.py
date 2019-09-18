@@ -105,7 +105,7 @@ np.random.seed(config['training']['random_seed'])
 writer = SummaryWriter(working_dir)
 
 # define and load model
-model = models.SeqModel(
+model = models.FusedSeqModel(
    src_vocab_size=src_vocab_size,
    tgt_vocab_size=tgt_vocab_size,
    pad_id_src=padding_id,
@@ -140,6 +140,8 @@ else:
     s_discriminators = None
 
 # main training loop
+
+# track auto-encoder metrics
 epoch_loss = []
 start_since_last_report = time.time()
 words_since_last_report = 0
@@ -148,35 +150,63 @@ losses_discrim = [[]]
 best_metric = 0.0
 best_epoch = 0
 cur_metric = 0.0 # log perplexity or BLEU
+
+# track discriminator metrics
+epoch_losses_discrim = [[]]
+losses_discrim = [[]]
+
+# training loop params
+assert batch_size >= n_styles, "Batch size must be greater than or equal to the number of styles"
 sample_size = batch_size // n_styles
 content_lengths = [len(datum['content']) for datum in train_data]
-num_batches = min(content_lengths) / sample_size
+
+# if adversarial paradigm always need >= 2 styles in minibatch to compare decoder states
+if config['training']['discriminator_ratio'] > 0:
+    max_l = max(content_lengths)
+    content_lengths.remove(max_l)
+    num_batches = max(content_lengths) / sample_size
+else:
+    num_batches = max(content_lengths) / sample_size
 
 STEP = 0
 for epoch in range(start_epoch, config['training']['epochs']):
     epoch_start_time = time.time()
     if cur_metric > best_metric:
-        # rm old checkpoint
+        # rm old checkpoints
         for ckpt_path in glob.glob(working_dir + '/model.*'):
             os.system("rm %s" % ckpt_path)
+        for ckpt_path in glob.glob(working_dir + '/s_discriminator.*'):
+            os.system("rm %s" % ckpt_path)
+
         # replace with new checkpoint
-        torch.save(model.state_dict(), working_dir + '/model.%s.ckpt' % epoch)
+        torch.save(model.state_dict(), working_dir + f'/model.{epoch}.ckpt')
+        [torch.save(s_discriminator.state_dict(), working_dir + f'/s_discriminator_{idx}.{epoch}.ckpt')
+            for idx, s_discriminator in enumerate(s_discriminators)]
 
         best_metric = cur_metric
         best_epoch = epoch - 1
 
     losses = []
-    for i in range(0, min(content_lengths), sample_size):
+    idx = max(content_lengths)
+    batch_idx = 0
+    while idx >= 0:
 
         if args.overfit:
-            i = 50
-
-        batch_idx = i / sample_size
+            idx = 50
+        batch_idx += 1
 
         # calculate loss
         loss_crit = config['training']['loss_criterion']
-        train_loss, s_losses, _ = evaluation.calculate_loss(train_data, n_styles, config, i, sample_size, max_length, 
+        
+        # set dataset list, batch_idx, and sample size according to corpii that support current idx range
+        # (i.e. take advantage of corpii that have more examples than smallest corpii)
+        style_ids = [i for i, corpus in enumerate(train_data) if idx in range(len(corpus['data']) + 1)]
+        train_sample_size = batch_size // len(style_ids)
+        idx -= train_sample_size
+
+        train_loss, s_losses = evaluation.calculate_loss(train_data, style_ids, n_styles, config, idx, train_sample_size, max_length, 
             config['model']['model_type'], model, s_discriminators, loss_crit, bt_ratio = config['training']['bt_ratio'])
+
         loss_item = train_loss.item() if loss_crit == 'cross_entropy' else -train_loss.item()
         losses.append(loss_item)
         losses_since_last_report.append(loss_item)
@@ -199,6 +229,8 @@ for epoch in range(start_epoch, config['training']['epochs']):
             if args.overfit or batch_idx % config['training']['batches_per_report'] == 0:
                 avg_losses = [np.mean(loss_discrim) for loss_discrim in losses_discrim]
                 [writer.add_scalar(f'stats/loss_discriminator_{idx}', avg_loss, STEP) for idx, avg_loss in enumerate(avg_losses)]
+                for loss_discrim in losses_discrim:
+                    loss_discrim = []
     
         bp_t = time.time()
         evaluation.backpropagation_step(train_loss, optimizer, retain_graph = False)
@@ -218,7 +250,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
             s = float(time.time() - start_since_last_report)
             wps = (batch_size * config['training']['batches_per_report']) / s
             avg_loss = np.mean(losses_since_last_report)
-            info = (epoch, batch_idx, num_batches, wps, avg_loss, cur_metric)
+            info = (epoch, num_batches - idx / sample_size, num_batches, wps, avg_loss, cur_metric)
             writer.add_scalar('stats/WPS', wps, STEP)
             writer.add_scalar('stats/loss', avg_loss, STEP)
             logging.info('EPOCH: %s ITER: %s/%s WPS: %.2f LOSS: %.4f METRIC: %.4f' % info)
@@ -236,11 +268,11 @@ for epoch in range(start_epoch, config['training']['epochs']):
     # evaluate on dev set, update scheduler
     start = time.time()
     model.eval()
-    dev_loss, d_dev_losses, mean_entropy = evaluation.evaluate_lpp(
+    dev_loss, d_dev_losses = evaluation.evaluate_lpp(
             model, s_discriminators, test_data, sample_size, config)
 
     writer.add_scalar('eval/loss', dev_loss, epoch)
-    writer.add_scalar('stats/mean_entropy', mean_entropy, epoch)
+    #writer.add_scalar('stats/mean_entropy', mean_entropy, epoch)
     if scheduler_name == 'plateau':
         for param_group in optimizer.param_groups:
             writer.add_scalar('stats/lr', param_group['lr'], epoch)

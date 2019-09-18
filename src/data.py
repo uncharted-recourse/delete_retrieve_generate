@@ -25,6 +25,7 @@ log = get_log_func(__name__)
 def train_test_split(
     inp_data, out_data=None, test_frac=0.1, valid_frac=0.0, shuffle=True
 ):
+    """ split data into training, testing, validation """
     # TODO set random seed?
     if shuffle:
         perm = np.random.permutation(len(inp_data))
@@ -60,6 +61,7 @@ def train_test_split(
         return inp_data_train, inp_data_test
 
 class CorpusSearcher(object):
+    """ object that supports searching for similar sequences by tfidf similarity"""
     def __init__(self, query_corpus, key_corpus, value_corpus, vectorizer, make_binary=True):
         self.vectorizer = vectorizer
         self.vectorizer.fit(key_corpus)
@@ -95,6 +97,7 @@ class CorpusSearcher(object):
         return selected
 
 class SalienceCalculator(object):
+    """ object that supports the calculation of the saliency of different n-grams across corpii"""
     def __init__(self, corpii, tokenize = None):
         if tokenize is None:
             self.vectorizer = CountVectorizer()
@@ -121,6 +124,7 @@ class SalienceCalculator(object):
         return sort[-1][0], (sort[-1][1] + lmbda) / (sort[-2][1] + lmbda)
 
 def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.1, ngram_range = 5, permutation = 0):
+    """ extract attributes from sequnce, either according to noising, word attr, or ngram attr strategy"""
 
     # do noisy masking according to Lample et. al (2017)
     if noise == 'dropout':
@@ -132,7 +136,7 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
                 content.append(tok)
             else:
                 # TODO: maybe just dropout
-                # we set non content tokens as attribute tokens, allows replacement in noising model
+                # we set non content tokens as attribute tokens, allows replacement in Delete + Retrieve
                 attribute_markers.append(tok)
 
     elif noise == 'ngram_attributes':
@@ -186,6 +190,7 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
     return line, content, attribute_markers
 
 def calculate_ngram_attribute_vocab(input_lines, salience_threshold, ngram_range):
+    """ calculates ngram vocabulary for each corpus based on saliency calculations across corpii"""
 
     def tokenize(text):
         text = text.split()
@@ -224,6 +229,7 @@ def calculate_ngram_attribute_vocab(input_lines, salience_threshold, ngram_range
     sc = SalienceCalculator(prepped_corpii, tokenize)
     return calculate_attribute_markers(prepped_corpii)
 
+""" could move all of these getters and get_tokenizer f() into an object"""
 def get_padding_id(tokenizer):
     return tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
 
@@ -250,6 +256,7 @@ def get_tokenizer(encoder = 'gpt2',
     cache_dir = None
 ):
 
+    """ gets tokenizer and defines special tokens"""
     # define dicts of tokenizers and tokenizer weights
     tokenizers = {
         'gpt': OpenAIGPTTokenizer, 
@@ -290,6 +297,7 @@ def get_tokenizer(encoder = 'gpt2',
     return tokenizer
 
 def read_nmt_data(input_lines, n_styles, config, train_data=None, cache_dir = None):
+    """ create dictionary of data objects for each corpus after extract attributes. also init tokenizer """
     """ input lines is list of different style corpus' """
 
     # 1. Perform noising
@@ -382,6 +390,7 @@ def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
     """
     replace sample_rate * batch_size lines with nearby examples (according to dist_measurer)
     not exactly the same as the paper (words shared instead of jaccaurd during train) but same idea
+    only relevant in Delete and Retrieve model where similar sentences substituted
     """
 
     out = [None for _ in range(len(lines))]
@@ -412,6 +421,7 @@ def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
 def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False, idx=None,
         dist_measurer=None, sample_rate=0.0):
     """Prepare minibatch. lines_even is a list of lines that contains an even number of samples from each style"""
+
     # FORCE NO SORTING because we care about the order of outputs
     #   to compare across systems
 
@@ -465,10 +475,12 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
     return input_lines, output_lines, lens, mask, idx
 
 
-def back_translation_minibatch(datasets, config, batch_idx, sample_size, max_len, model, model_type):
+def back_translation_minibatch(datasets, style_ids, n_styles, config, batch_idx, sample_size, max_len, model, model_type):
 
+    """ get minibatch of sentences for backtranslation. These sentences are generated as discrete sequences
+        and thus are not back-propagated through. """
     # get minibatch of inputs, attributes, outputs in other style direction
-    input_content, input_aux, _, out_dataset_ordering = minibatch(datasets, idx, sample_size, max_len, 
+    input_content, input_aux, _, out_dataset_ordering = minibatch(datasets, style_ids, n_styles, batch_idx, sample_size, max_len, 
         config['model']['model_type'], is_bt = True)
 
     # decode dataset with greedy, beam search, or top k
@@ -502,8 +514,9 @@ def back_translation_minibatch(datasets, config, batch_idx, sample_size, max_len
         batch_len = len(input_content[0]) // len(out_dataset_ordering)
         start_idx = attr_id_orig * batch_len
         stop_idx = (attr_id_orig + 1) * batch_len
+        attribute_vocab = None if atrrs == None else attrs[attr_id_middle]
         _, content, _ = list(zip(
-            *[extract_attributes(line.split(), attrs[attr_id_middle], config['data']['noise'], config['data']['dropout_prob'],
+            *[extract_attributes(line.split(), attribute_vocab, config['data']['noise'], config['data']['dropout_prob'],
                 config['data']['ngram_range'], config['data']['permutation']) for line in preds[start_idx:stop_idx]]
         ))
 
@@ -519,26 +532,33 @@ def back_translation_minibatch(datasets, config, batch_idx, sample_size, max_len
 
     # set is_bt false, translate in same direction for evaluation
     # set 0 indexing in minibatch
-    bt_minibatch = minibatch(bt_datasets, idx, sample_size, batch_len, config['model']['model_type'], is_bt=True)
+    bt_minibatch = minibatch(bt_datasets, out_dataset_ordering, n_styles, 
+        batch_idx, sample_size, batch_len, config['model']['model_type'], bt_orig_datasets=datasets)
      
     return bt_minibatch
 
-def minibatch(datasets, idx, batch_size, max_len, model_type, is_bt = False, is_test = False, bt_orig_datasets = None):
-    # datasets is a list of datasets (one of each style) 
-    # bt_orig_datasets - original datasets before backtranslation (tgt datasets)
-
+def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_type, 
+        is_bt = False, is_adv = False, is_test = False, bt_orig_datasets = None):
+    """ get minibatch of data - functionality determined by where mb is for backtranslation, train, or test
+        datasets is a list of datasets (one of each style) 
+        bt_orig_datasets - original datasets before backtranslation (tgt datasets) """
+    
     # order lists of input / output datasets depending on whether train, test, BT    
-    n_styles = len(datasets)
+    in_datasets = [datasets[style_id] for style_id in style_ids]
     if bt_orig_datasets is None:
         out_dataset_ordering = []
         out_datasets = datasets
         input_idx = idx
-        for i in range(n_styles):
-            if is_bt: # backtranslation randomly sample different intermediate style
+        for i in style_ids:
+            if is_bt: # backtranslation: randomly sample different intermediate style
                 tgt_idx = random.randint(0, n_styles - 1)
                 # could do this more efficiently by sampling whole permutation
-                while tgt_idx == i or tgt_idx in out_dataset_ordering:
+                while tgt_idx == i:
                     tgt_idx = random.randint(0, n_styles - 1)
+            elif is_adv: # adversarial: randomly sample intermediate style from list of style_ids
+                tgt_idx = random.choice(style_ids)
+                while tgt_idx == i or tgt_idx in out_dataset_ordering:
+                    tgt_idx = random.choice(style_ids)
             elif is_test: # test translate to next style in list to make eval easier
                 tgt_idx = (i + 1) % n_styles
             else: # train, sample style
@@ -546,13 +566,13 @@ def minibatch(datasets, idx, batch_size, max_len, model_type, is_bt = False, is_
             out_dataset_ordering.append(tgt_idx)
     else:
         # handle special BT case opposite direction
-        out_dataset_ordering = [i for i in range(n_styles)]
+        #out_dataset_ordering = [i for i in range(n_styles)]
         out_datasets = bt_orig_datasets
         # because bt input dataset always starts at idx 0
         input_idx = 0
     
-    in_content = [dataset['content'] for dataset in datasets]
-    in_data = [dataset['data'] for dataset in datasets]
+    in_content = [dataset['content'] for dataset in in_datasets]
+    in_data = [dataset['data'] for dataset in in_datasets]
     out_data = [out_datasets[i]['data'] for i in out_dataset_ordering]
     out_attributes = [out_datasets[i]['attribute'] for i in out_dataset_ordering]
     out_dist_measurers = [out_datasets[i]['dist_measurer'] for i in out_dataset_ordering]
@@ -564,10 +584,10 @@ def minibatch(datasets, idx, batch_size, max_len, model_type, is_bt = False, is_
             out_data, tokenizer, idx, batch_size, max_len, idx=inputs[-1])
 
         # true length could be less than batch_size at edge of data
-        batch_len = len(outputs[0]) // n_styles
+        batch_len = len(outputs[0]) // len(style_ids)
         attribute_ids = [[attribute_id] * batch_len for attribute_id in out_dataset_ordering]
         attribute_ids = [attr_id for id_list in attribute_ids for attr_id in id_list]
-        attribute_ids = Variable(torch.LongTensor(attribute_ids))
+        attribute_ids = Variable(torch.unsqueeze(torch.LongTensor(attribute_ids), 1))
         if CUDA:
             attribute_ids = attribute_ids.cuda()
 

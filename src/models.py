@@ -21,8 +21,10 @@ root_logger = logging.getLogger()
 root_logger.setLevel(log_level)
 log = get_log_func(__name__)
 
-def get_latest_ckpt(ckpt_dir):
-    ckpts = glob.glob(os.path.join(ckpt_dir, '*.ckpt'))
+def get_latest_ckpt(ckpt_dir, model_type = 'model'):
+    """ get latest model checkpoint from ckpt_dir"""    
+
+    ckpts = glob.glob(os.path.join(ckpt_dir, model_type + '*.ckpt'))
     # nothing to load, continue with fresh params
     if len(ckpts) == 0:
         return -1, None
@@ -34,7 +36,9 @@ def get_latest_ckpt(ckpt_dir):
     return epoch, ckpt_path
 
 
-def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None, map_location=None):
+def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None, map_location=None, model_type = 'model'):
+    """ attempt to load model from directory or path and an (optional) device map location"""
+
     assert checkpoint_dir or checkpoint_path
     if checkpoint_dir:
         epoch, checkpoint_path = get_latest_ckpt(checkpoint_dir)
@@ -49,6 +53,7 @@ def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None, map_loc
         return model, 0
 
 def initialize_inference_model(config=None):
+    """ initialize inference model for deployment"""
 
     # read target data from training corpus to estalish attribute vocabulary / similarity
     log("reading training data from style corpus'", level="debug")
@@ -226,9 +231,12 @@ class SeqModel(nn.Module):
         # join attribute with h/c then bridge 'em
         # TODO -- put this stuff in a method, overlaps w/above
 
+        # attribute embedding can be average of different styles (indicator variables or
+        # words) only utilized at inference time, not during training 
+
         if self.model_type == 'delete':
-            # just do h i guess?x
-            a_ht = self.attribute_embedding(input_attr)
+            a_hts = self.attribute_embedding(input_attr)
+            a_ht = torch.mean(torch.stack(a_hts, dim=1), dim=1) if a_hts.shape[1] > 1 else a_hts.squeeze(1)
             if self.options['encoder'] == 'lstm':
                 c_t = torch.cat((c_t_encoder, a_ht), -1)
                 c_t = self.c_bridge(c_t)
@@ -243,7 +251,8 @@ class SeqModel(nn.Module):
                     a_mask = a_mask.cuda()
                 srcmask = torch.cat((a_mask, srcmask), dim = 1)
         elif self.model_type == 'delete_retrieve':
-            attr_emb = self.src_embedding(input_attr)
+            attr_embs = [self.src_embedding(i_attr) for i_attr in input_attr]
+            attr_emb = torch.mean(torch.stack(attr_embs, dim=1), dim=1)
 
             if self.options['encoder'] == 'lstm':
                 _, (a_ht, a_ct) = self.attribute_encoder(attr_emb, attrlens, attrmask)
@@ -344,7 +353,6 @@ class FusedSeqModel(SeqModel):
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
 
         # generate predictions from language model
-        # TODO: subclass language model to take input_tgt as probability distribution
         lm_logit = self.language_model.forward(input_tgt, attention_mask = ~tgtmask)
 
         # generate s2s logits
