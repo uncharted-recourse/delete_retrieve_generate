@@ -15,8 +15,8 @@
     "num_samples": 3 
   },
   "data": {
-    "train": ["data/gyafc_raw/sentiment.train.0.reduced", "data/gyafc_raw/sentiment.train.1.reduced"],
-    "test": ["data/gyafc_raw/sentiment.dev.0_", "data/gyafc_raw/sentiment.dev.1_"],
+    "train": ["data/gyafc_raw/sentiment.train.0.reduced", "data/gyafc_raw/sentiment.train.1.reduced", "data/imagecaption_raw/sentiment.train.0.reduced", "data/imagecaption_raw/sentiment.train.1.reduced"],
+    "test": ["data/gyafc_raw/sentiment.dev.0.head", "data/gyafc_raw/sentiment.dev.1.head", "data/imagecaption_raw/sentiment.dev.0.head", "data/imagecaption_raw/sentiment.dev.1.head"],
     "tokenizer": "gpt",
     "share_vocab": true,
     "noise": "dropout",
@@ -43,7 +43,7 @@
         "tgt_layers": 1,
         "decode": "top_k",
         "beam_width": 5,
-        "k": 3,
+        "k": 5,
         "temperature": 1.0,
         "dropout": 0.2
     }

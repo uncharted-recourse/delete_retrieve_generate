@@ -8,7 +8,7 @@ from src.cuda import CUDA
 
 class LSTMEncoder(nn.Module):
     """ simple wrapper for a bi-lstm """
-    def __init__(self, emb_dim, hidden_dim, layers, bidirectional, dropout, pack=True):
+    def __init__(self, emb_dim, hidden_dim, layers, bidirectional, dropout, pack=False):
         super(LSTMEncoder, self).__init__()
 
         self.num_directions = 2 if bidirectional else 1
@@ -42,7 +42,7 @@ class LSTMEncoder(nn.Module):
             return h0, c0
 
 
-    def forward(self, src_embedding, srclens, srcmask, temp=1):
+    def forward(self, src_embedding, srclens):
         h0, c0 = self.init_state(src_embedding)
 
         if self.pack:
@@ -56,3 +56,28 @@ class LSTMEncoder(nn.Module):
             outputs, _ = pad_packed_sequence(outputs, batch_first=True)
 
         return outputs, (h_final, c_final)
+
+class TransformerEncoder(nn.Module):
+    """ simple wrapper for a pytorch transformer encoder """
+    def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4):
+        r""" Encoder is a stack of N encoder layers"""
+        super(TransformerEncoder, self).__init__()
+
+        self.encoder_layer = nn.TransformerEncoderLayer(
+            emb_dim, 
+            n_head, 
+            dim_feedforward = dim_ff, 
+            dropout = dropout
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            self.encoder_layer, 
+            num_layers, 
+            norm = nn.LayerNorm(emb_dim)
+        )
+
+    def forward(self, src_embedding, srcmask):
+        r""" Pass the inputs (and masks) through each encoder layer in turn"""
+        return self.transformer_encoder.forward(
+            src_embedding.transpose(0,1), 
+            src_key_padding_mask = srcmask
+        ).transpose(0,1)

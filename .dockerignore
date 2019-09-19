@@ -1,10 +1,13 @@
 # What should we not copy in to the container?
 
 # mount volumes for data storage instead
-!checkpoints/
+checkpoints/
+other_data/
 !data/
 compare_preds.py
 tools/
+testing/
+pytorch/
 
 scripts/__pycache__
 __pycache__/

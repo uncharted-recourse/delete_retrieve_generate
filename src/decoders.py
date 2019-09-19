@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+from src.cuda import CUDA
 
 class BilinearAttention(nn.Module):
     """ bilinear attention layer: score(H_j, q) = H_j^T W_a q
@@ -70,7 +71,10 @@ class AttentionalLSTM(nn.Module):
         output = []
         timesteps = range(input.size(0))
         for i in timesteps:
-            hy, cy = self.cell(input[i], hidden)
+            if type(hidden[0]) == type(None):
+                hy, cy = self.cell(input[i])
+            else:
+                hy, cy = self.cell(input[i], hidden)
             if self.use_attention:
                 _, h_tilde, alpha = self.attention_layer(hy, ctx, srcmask)
                 hidden = h_tilde, cy
@@ -82,9 +86,7 @@ class AttentionalLSTM(nn.Module):
         # combine outputs, and get into [time, batch, dim]
         output = torch.cat(output, 0).view(
             input.size(0), *output[0].size())
-
         output = output.transpose(0, 1)
-
         return output, hidden
 
 
@@ -126,4 +128,49 @@ class StackedAttentionLSTM(nn.Module):
 
         return input, (h_final, c_final)
 
+class TransformerDecoder(nn.Module):
+    r""" simple wrapper for a pytorch transformer encoder """
+    def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4):
+        r""" Decoder is a stack of N decoder layers"""
+        super(TransformerDecoder, self).__init__()
+
+        self.emb_dim = emb_dim
+        self.decoder_layer = nn.TransformerDecoderLayer(
+            self.emb_dim, 
+            n_head, 
+            dim_feedforward = dim_ff, 
+            dropout = dropout
+        )
+        self.transformer_decoder = nn.TransformerDecoder(
+            self.decoder_layer, 
+            num_layers,
+            norm = nn.LayerNorm(emb_dim)
+        )
+
+    def forward(self, tgt_embedding, encoder_output, tgtmask, srcmask):
+        r""" Pass the inputs (and masks) through each decoder layer in turn"""
+        # generate square padding masks so that only positions before i can influence attention op
+        src_position_mask = self.generate_square_subsequent_mask(encoder_output.size(1))
+        src_position_mask = src_position_mask[:tgt_embedding.size(1)]
+        tgt_position_mask = self.generate_square_subsequent_mask(tgt_embedding.size(1)) 
+        if CUDA:
+            src_position_mask = src_position_mask.cuda()
+            tgt_position_mask = tgt_position_mask.cuda()
+
+        return self.transformer_decoder.forward(
+            tgt_embedding.transpose(0,1), 
+            encoder_output.transpose(0,1), 
+            tgt_key_padding_mask = tgtmask, 
+            memory_key_padding_mask = srcmask,
+            tgt_mask = tgt_position_mask,
+            memory_mask = src_position_mask
+        ).transpose(0,1)
+
+    def generate_square_subsequent_mask(self, sz):
+        r"""Generate a square mask for the sequence. The masked positions are filled with float('-inf').
+            Unmasked positions are filled with float(0.0). Copied from torch Transformer base class. 
+        """
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
 
