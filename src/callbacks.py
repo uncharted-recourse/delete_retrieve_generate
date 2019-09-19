@@ -2,6 +2,7 @@
 import numpy as np 
 
 def mean_masked_entropy(probs, y_true, pad_id):
+    """ calculate the mean entropy of a (masked) probability distribution -> probs * log(probs)"""
 
     mask = np.not_equal(y_true, pad_id)
     if len(mask.shape) == 3:

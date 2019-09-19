@@ -13,7 +13,7 @@ from src import evaluation
 
 import logging
 from utils.log_func import get_log_func
-from pytorch_transformers import BertTokenizer, OpenAIGPTTokenizer, GPT2Tokenizer, XLNetTokenizer, TransfoXLTokenizer
+from pytorch_transformers import OpenAIGPTTokenizer, GPT2Tokenizer#, XLNetTokenizer, TransfoXLTokenizer
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from tqdm import tqdm
 
@@ -25,6 +25,7 @@ log = get_log_func(__name__)
 def train_test_split(
     inp_data, out_data=None, test_frac=0.1, valid_frac=0.0, shuffle=True
 ):
+    """ split data into training, testing, validation """
     # TODO set random seed?
     if shuffle:
         perm = np.random.permutation(len(inp_data))
@@ -60,6 +61,7 @@ def train_test_split(
         return inp_data_train, inp_data_test
 
 class CorpusSearcher(object):
+    """ object that supports searching for similar sequences by tfidf similarity"""
     def __init__(self, query_corpus, key_corpus, value_corpus, vectorizer, make_binary=True):
         self.vectorizer = vectorizer
         self.vectorizer.fit(key_corpus)
@@ -95,67 +97,34 @@ class CorpusSearcher(object):
         return selected
 
 class SalienceCalculator(object):
-    def __init__(self, pre_corpus, post_corpus, tokenize = None):
+    """ object that supports the calculation of the saliency of different n-grams across corpii"""
+    def __init__(self, corpii, tokenize = None):
         if tokenize is None:
             self.vectorizer = CountVectorizer()
         else:
             self.vectorizer = CountVectorizer(tokenizer=tokenize)
 
-        pre_count_matrix = self.vectorizer.fit_transform(pre_corpus)
-        self.pre_vocab = self.vectorizer.vocabulary_
-        self.pre_counts = np.sum(pre_count_matrix, axis=0)
-        self.pre_counts = np.squeeze(np.asarray(self.pre_counts))
+        count_matrices = [self.vectorizer.fit_transform(corpus) for corpus in corpii]
+        self.vocab = self.vectorizer.vocabulary_
+        self.counts = [np.sum(count_matrix, axis=0) for count_matrix in count_matrices]
+        self.counts = [np.squeeze(np.asarray(count)) for count in self.counts]
 
-        post_count_matrix = self.vectorizer.fit_transform(post_corpus)
-        self.post_vocab = self.vectorizer.vocabulary_
-        self.post_counts = np.sum(post_count_matrix, axis=0)
-        self.post_counts = np.squeeze(np.asarray(self.post_counts))
+    def max_salience(self, feature, lmbda=0.5):
+        # returns index of corpus with highest salience value and this value
+        # salience = highest count / 2nd highest count, where highest and 2nd highest counts must be different
 
-    def salience(self, feature, attribute='pre', lmbda=0.5):
-        assert attribute in ['pre', 'post']
-        if feature not in self.pre_vocab:
-            pre_count = 0.0
-        else:
-            pre_count = self.pre_counts[self.pre_vocab[feature]]
+        feature_counts = [0.0 for _ in self.counts]
+        corpus_indices = [i for i in range(len(self.counts))]
+        for idx, style_count in enumerate(self.counts):
+            if feature in self.vocab:
+                feature_counts[idx] = style_count[self.vocab[feature]]
 
-        if feature not in self.post_vocab:
-            post_count = 0.0
-        else:
-            post_count = self.post_counts[self.post_vocab[feature]]
-
-        if attribute == 'pre':
-            return (pre_count + lmbda) / (post_count + lmbda)
-        else:
-            return (post_count + lmbda) / (pre_count + lmbda)
-
-
-# def build_vocab_maps(vocab_file):
-#     assert os.path.exists(vocab_file), "The vocab file %s does not exist" % vocab_file
-#     unk = '<unk>'
-#     pad = '<pad>'
-#     sos = '<s>'
-#     eos = '</s>'
-
-#     lines = [x.strip() for x in open(vocab_file)]
-
-#     assert lines[0] == unk and lines[1] == pad and lines[2] == sos and lines[3] == eos, \
-#         "The first words in %s are not %s, %s, %s, %s" % (vocab_file, unk, pad, sos, eos)
-
-#     tok_to_id = {}
-#     id_to_tok = {}
-#     for i, vi in enumerate(lines):
-#         tok_to_id[vi] = i
-#         id_to_tok[i] = vi
-
-#     # Extra vocab item for empty attribute lines
-#     empty_tok_idx =  len(id_to_tok)
-#     tok_to_id['<empty>'] = empty_tok_idx
-#     id_to_tok[empty_tok_idx] = '<empty>'
-
-#     return tok_to_id, id_to_tok
-
+        # sort feature counts and corpus indices in tandem
+        sort = [(idx, count) for idx, count in sorted(zip(corpus_indices,feature_counts))]
+        return sort[-1][0], (sort[-1][1] + lmbda) / (sort[-2][1] + lmbda)
 
 def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.1, ngram_range = 5, permutation = 0):
+    """ extract attributes from sequnce, either according to noising, word attr, or ngram attr strategy"""
 
     # do noisy masking according to Lample et. al (2017)
     if noise == 'dropout':
@@ -167,7 +136,7 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
                 content.append(tok)
             else:
                 # TODO: maybe just dropout
-                # we set non content tokens as attribute tokens, allows replacement in noising model
+                # we set non content tokens as attribute tokens, allows replacement in Delete + Retrieve
                 attribute_markers.append(tok)
 
     elif noise == 'ngram_attributes':
@@ -198,7 +167,7 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
         attribute_markers = []
         for marker in candidate_markers:
             if marker in content:
-                attribute_markers.append(marker.split())
+                attribute_markers.extend(marker.split())
                 content = content.replace(marker, "")
         content = content.split()
         
@@ -220,7 +189,8 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
 
     return line, content, attribute_markers
 
-def calculate_ngram_attribute_vocab(tokenized_src_lines, tokenized_tgt_lines, salience_threshold, ngram_range):
+def calculate_ngram_attribute_vocab(input_lines, salience_threshold, ngram_range):
+    """ calculates ngram vocabulary for each corpus based on saliency calculations across corpii"""
 
     def tokenize(text):
         text = text.split()
@@ -233,31 +203,33 @@ def calculate_ngram_attribute_vocab(tokenized_src_lines, tokenized_tgt_lines, sa
             grams.extend(i_grams)
         return grams
     
-    # corpii is a tuple of corpus' to calculate attributes over
+    # corpii is an iterable of corpus' to calculate attributes over
     def calculate_attribute_markers(corpii):
-        pre_attr = {}
-        post_attr = {}
+        attrs = [{} for _ in range(len(corpii))]
+        joined = []
         for corpus in corpii:
             for sentence in tqdm(corpus):
                 for i in range(1, ngram_range):
                     i_grams = ngrams(sentence.split(), i)
-                    joined = [
+                    joined.extend([
                         " ".join(gram)
                         for gram in i_grams
-                    ]
-                    for gram in joined:
-                        negative_salience = sc.salience(gram, attribute='pre')
-                        positive_salience = sc.salience(gram, attribute='post')
-                        if max(negative_salience, positive_salience) > salience_threshold:
-                            pre_attr[gram] = negative_salience
-                            post_attr[gram] = positive_salience
-        return pre_attr, post_attr
+                    ])
+        # find unique n_grams across all corpii
+        unique_grams = np.unique(np.array(joined))
 
-    prepped_src = [' '.join(line) for line in tokenized_src_lines]
-    prepped_tgt = [' '.join(line) for line in tokenized_tgt_lines]
-    sc = SalienceCalculator(prepped_src, prepped_tgt, tokenize)
-    return calculate_attribute_markers((prepped_src, prepped_tgt))
+        # calculate saliences and return n-gram attribute lists
+        for gram in unique_grams:
+            salience_index, max_sal = sc.max_salience(gram, salience_threshold)
+            if max_sal > salience_threshold:
+                attrs[salience_index][gram] = max_sal
+        return attrs
 
+    prepped_corpii = [[' '.join(line) for line in corpus] for corpus in input_lines]
+    sc = SalienceCalculator(prepped_corpii, tokenize)
+    return calculate_attribute_markers(prepped_corpii)
+
+""" could move all of these getters and get_tokenizer f() into an object"""
 def get_padding_id(tokenizer):
     return tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
 
@@ -284,28 +256,30 @@ def get_tokenizer(encoder = 'gpt2',
     cache_dir = None
 ):
 
+    """ gets tokenizer and defines special tokens"""
     # define dicts of tokenizers and tokenizer weights
     tokenizers = {
         'gpt': OpenAIGPTTokenizer, 
         'gpt2': GPT2Tokenizer, 
-        'xlnet': XLNetTokenizer,
-        'transformerxl': TransfoXLTokenizer
+        # 'xlnet': XLNetTokenizer,
+        # 'transformerxl': TransfoXLTokenizer
     }
     tokenizer_weights = {
         'gpt': 'openai-gpt', 
         'gpt2': 'gpt2', 
-        'xlnet': 'xlnet-base-cased',
-        'transformerxl': 'transfo-xl-wt103'
+        # 'xlnet': 'xlnet-base-cased',
+        # 'transformerxl': 'transfo-xl-wt103'
     }
 
     if encoder not in tokenizers.keys():
-        raise Exception("Tokenizer must be one of 'bert', 'gpt', 'gpt2', 'xlnet', 'transformerxl', or tensorflow subword vocab file")
+        raise Exception("Tokenizer must be one of 'gpt', 'gpt2'")#, 'xlnet', 'transformerxl'")
     else:    
         tokenizer = tokenizers[encoder].from_pretrained(
             tokenizer_weights[encoder], 
             cache_dir = cache_dir,
             bos_token = start_token,
             eos_token = stop_token,
+            sep_token = stop_token # set sep token to prevent verbose warnings
             # pad_token = pad_token,
             # additional_special_tokens = [empty_token]
         )
@@ -322,127 +296,101 @@ def get_tokenizer(encoder = 'gpt2',
     #tokenized_lines = [[str(e) for e in tokenizer.encode(line)] for line in lines]
     return tokenizer
 
-def read_nmt_data(src_lines, tgt_lines, config, train_src=None, train_tgt=None, cache_dir = None):
-
-    # 1. Tokenize raw text data
-    # tokenized_src_lines, tokenizer = encode_text_data(src_lines, 
-    #     encoder = config['data']['tokenizer'], 
-    #     cache_dir=cache_dir
-    # )
-    # tokenized_tgt_lines, _ = encode_text_data(tgt_lines, 
-    #     encoder = config['data']['tokenizer'], 
-    #     cache_dir=cache_dir
-    # )
-    # tokenized_src_corpus = [w for line in tokenized_src_lines for w in line]
-    # tokenized_tgt_corpus = [w for line in tokenized_tgt_lines for w in line]
-    # tokenized_vocab = np.unique(np.array(tokenized_src_corpus + tokenized_tgt_corpus))
+def read_nmt_data(input_lines, n_styles, config, train_data=None, cache_dir = None):
+    """ create dictionary of data objects for each corpus after extract attributes. also init tokenizer """
+    """ input lines is list of different style corpus' """
 
     # 1. Perform noising
     # A.  do noisy masking according to Lample et. al (2017) - in extract_attributes()
     if config['data']['noise'] == 'dropout':
-        pre_attr = post_attr = None
+        attrs = [None for _ in range(n_styles)]
 
     # B. do masking on attribute vocabulary 
     if config['data']['noise'] == 'word_attributes':
 
         # try to load attribute vocabs from cache if they exist
-        pre_attr_path = os.path.join(cache_dir, 'pre_attribute_vocab.pkl')
-        post_attr_path = os.path.join(cache_dir, 'post_attribute_vocab.pkl')
-        if os.path.isfile(pre_attr_path) and os.path.isfile(post_attr_path):
-            pre_attr = pickle.load(open(pre_attr_path, "rb"))
-            post_attr = pickle.load(open(post_attr_path, "rb"))
+        attr_path = os.path.join(cache_dir, 'style_vocabs.pkl')
+        if os.path.isfile(attr_path):
+            attrs = pickle.load(open(attr_path, "rb"))
         else:
-            src_corpus = [w for line in src_lines for w in line]
-            tgt_corpus = [w for line in tgt_lines for w in line]
-            corpus_vocab = np.unique(np.array(src_corpus + tgt_corpus))
-            sc = SalienceCalculator(src_corpus, tgt_corpus)
+            corpii = [[w for line in lines for w in line] for lines in input_lines]
+            corpii_vocab = []
+            for corpus in corpii:
+                corpii_vocab += corpus
+            corpii_vocab = np.unique(np.array(corpii_vocab))
+            sc = SalienceCalculator(corpii)
+
             # extract attributes 
-            pre_attr = post_attr = set([tok for tok in corpus_vocab if max(sc.salience(tok, attribute='pre'), sc.salience(tok, attribute='post')) > config['data']['salience_threshold']])
-            pickle.dump(pre_attr, open(pre_attr_path, "wb"))
-            pickle.dump(post_attr, open(post_attr_path, "wb"))
+            attrs = [[] for _ in range(n_styles)]
+            for tok in corpii_vocab:
+                salience_index, max_sal = sc.max_salience(tok)
+                if max_sal > config['data']['salience_threshold']:
+                    attrs[salience_index].append(tok)
+            pickle.dump(attrs, open(attr_path, "wb"))
 
     # C. do masking on n-gram attribute vocabulary
     elif config['data']['noise'] == 'ngram_attributes':
 
         # try to load attribute vocabs from cache if they exist
-        pre_attr_path = os.path.join(cache_dir, 'pre_attribute_vocab.pkl')
-        post_attr_path = os.path.join(cache_dir, 'post_attribute_vocab.pkl')
-        if os.path.isfile(pre_attr_path) and os.path.isfile(post_attr_path):
-            pre_attr = pickle.load(open(pre_attr_path, "rb"))
-            post_attr = pickle.load(open(post_attr_path, "rb"))
+        attr_path = os.path.join(cache_dir, 'style_vocabs.pkl')
+        if os.path.isfile(attr_path):
+            attrs = pickle.load(open(attr_path, "rb"))
         else:
-            pre_attr, post_attr = calculate_ngram_attribute_vocab(src_lines, 
-                tgt_lines,
+            attrs = calculate_ngram_attribute_vocab(input_lines, 
                 config['data']['salience_threshold'], 
                 config['data']['ngram_range'])
-            pickle.dump(pre_attr, open(pre_attr_path, "wb"))
-            pickle.dump(post_attr, open(post_attr_path, "wb"))
+            pickle.dump(attrs, open(attr_path, "wb"))
     
     # 2. Extract attributes:
-    src_lines, src_content, src_attribute = list(zip(
-        *[extract_attributes(line, pre_attr, config['data']['noise'], config['data']['dropout_prob'],
-            config['data']['ngram_range'], config['data']['permutation']) for line in src_lines]
-    ))
-    tgt_lines, tgt_content, tgt_attribute = list(zip(
-        *[extract_attributes(line, post_attr, config['data']['noise'], config['data']['dropout_prob'],
-            config['data']['ngram_range'], config['data']['permutation']) for line in tgt_lines]
-    ))
+    # data is a list with content and attribute information stored for each style corpus
+        # each line in each style corpus has been segmented into content and attribute information according to pre-processing
+    data = [list(zip(
+        *[extract_attributes(line, attrs[style_idx], config['data']['noise'], config['data']['dropout_prob'],
+            config['data']['ngram_range'], config['data']['permutation']) for line in lines]
+            )) for style_idx, lines in enumerate(input_lines)]
 
-    # train time: just pick attributes that are close to the current (using word distance)
-    # we never need to do the TFIDF thing with the source because 
-    # test time is strictly in the src => tgt direction. 
-    # But we still both src and tgt dist measurers because training is bidirectional
-    #  (i.e., we're autoencoding src and tgt sentences during training)        
-    if train_src is None or train_tgt is None:
-        src_dist_measurer = CorpusSearcher(
-            query_corpus=[' '.join(x) for x in src_attribute],
-            key_corpus=[' '.join(x) for x in src_attribute],
-            value_corpus=[' '.join(x) for x in src_attribute],
-            vectorizer=CountVectorizer(),
-            make_binary=True
-        )
-        tgt_dist_measurer = CorpusSearcher(
-            query_corpus=[' '.join(x) for x in tgt_attribute],
-            key_corpus=[' '.join(x) for x in tgt_attribute],
-            value_corpus=[' '.join(x) for x in tgt_attribute],
-            vectorizer=CountVectorizer(),
-            make_binary=True
-        )
-    # at test time, scan through train content (using tfidf) and retrieve corresponding attributes
+    # train time: pick attributes that are close to the current (using word distance)      
+    # only need to define these distance measurers if using the delete and retrieve model
+    if config['model']['model_type'] == 'delete_retrieve':
+        if train_data is None:
+            dist_measurers = [CorpusSearcher(
+                query_corpus=[' '.join(x) for x in attributes],
+                key_corpus=[' '.join(x) for x in attributes],
+                value_corpus=[' '.join(x) for x in attributes],
+                vectorizer=CountVectorizer(),
+                make_binary=True)
+                for (_, _, attributes) in data]
+
+        # at test time, scan through train content (using tfidf) and retrieve corresponding attributes
+        # need to create a test dist measurer for each permutation of styles
+        else:
+            dist_measurers = [[CorpusSearcher(
+                query_corpus=[' '.join(x) for x in test_content],
+                key_corpus=[' '.join(x) for x in train_content],
+                value_corpus=[' '.join(x) for x in train_attributes],
+                vectorizer=TfidfVectorizer(),
+                make_binary=False)
+                for (_, train_content, train_attributes) in train_data]
+                for (_, test_content, _) in data]
     else:
-        src_dist_measurer = CorpusSearcher(
-            query_corpus=[' '.join(x) for x in tgt_content],
-            key_corpus=[' '.join(x) for x in train_src['content']],
-            value_corpus=[' '.join(x) for x in train_src['attribute']],
-            vectorizer=TfidfVectorizer(),
-            make_binary=False
-        )
-        tgt_dist_measurer = CorpusSearcher(
-            query_corpus=[' '.join(x) for x in src_content],
-            key_corpus=[' '.join(x) for x in train_tgt['content']],
-            value_corpus=[' '.join(x) for x in train_tgt['attribute']],
-            vectorizer=TfidfVectorizer(),
-            make_binary=False
-        )
-    
+        dist_measurers = [None for _ in range(n_styles)]
+
     # instantiate tokenizer
     tokenizer = get_tokenizer(encoder = config['data']['tokenizer'], cache_dir=cache_dir)
 
-    # create dictionaries of src and tgt data
-    src = {
-        'data': src_lines, 'content': src_content, 'attribute': src_attribute,
-        'dist_measurer': src_dist_measurer, 'tokenizer': tokenizer    
-    }
-    tgt = {
-        'data': tgt_lines, 'content': tgt_content, 'attribute': tgt_attribute,
-        'dist_measurer': tgt_dist_measurer, 'tokenizer': tokenizer
-    }
-    return src, tgt
+    # create dictionaries of train or test data
+    datasets = [{
+        'data': lines, 'content': content, 'attribute': attributes,
+        'dist_measurer': dist_measurer, 'tokenizer': tokenizer} 
+        for (lines, content, attributes), dist_measurer in zip(data, dist_measurers)]
+
+    return datasets
 
 def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
     """
     replace sample_rate * batch_size lines with nearby examples (according to dist_measurer)
     not exactly the same as the paper (words shared instead of jaccaurd during train) but same idea
+    only relevant in Delete and Retrieve model where similar sentences substituted
     """
 
     out = [None for _ in range(len(lines))]
@@ -455,14 +403,13 @@ def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
             try:
                 line = next( (
                     tgt_attr.split() for tgt_attr, _, _ in sims
-                    if set(tgt_attr.split()) != set(line[1:-1]) # and tgt_attr != ''   # TODO -- exclude blanks?
+                    if set(tgt_attr.split()) != set(line) # and tgt_attr != ''   # TODO -- exclude blanks?
                 ) )
             # all the matches are blanks
             except StopIteration:
                 line = []
-            #line = line
 
-        # corner case: special tok for empty sequences (just start/end tok)
+        # corner case: special tok for empty sequences 
         if len(line) == 0:
             #replace_count += 1
             line.insert(1, tokenizer.additional_special_tokens[0])
@@ -471,20 +418,24 @@ def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
     return out
 
 
-def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=None,
+def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False, idx=None,
         dist_measurer=None, sample_rate=0.0):
-    """Prepare minibatch."""
+    """Prepare minibatch. lines_even is a list of lines that contains an even number of samples from each style"""
+
     # FORCE NO SORTING because we care about the order of outputs
     #   to compare across systems
 
-    lines = [line[:max_len] for line in lines[index:index + batch_size]]
-
-    if dist_measurer is not None:
-        lines = sample_replace(lines, dist_measurer, sample_rate, index)
-
-    lines = [tokenizer.encode(tokenizer.bos_token + " ".join(line) + tokenizer.eos_token) for line in lines]
+    lines = [line[:max_len] for lines in lines_even for line in lines[index:index + batch_size]]
     lens = [len(line) - 1 for line in lines]
-    max_len = max(lens)
+    if dist_measurer is not None:
+        lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
+
+    lines = [
+        [get_start_id(tokenizer)] + 
+        tokenizer.encode(" ".join(line))[:max_len - 2] + 
+        [get_stop_id(tokenizer)] for line in lines]
+
+    lens = [len(line) - 1 for line in lines]
     
     input_lines = [
         line[:-1] +
@@ -499,7 +450,7 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     ]
 
     mask = [
-        ([1] * l) + ([0] * (max_len - l))
+        ([False] * l) + ([True] * (max_len - l))
         for l in lens
     ]
 
@@ -515,8 +466,7 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
 
     input_lines = Variable(torch.LongTensor(input_lines))
     output_lines = Variable(torch.LongTensor(output_lines))
-    mask = Variable(torch.FloatTensor(mask))
-
+    mask = Variable(torch.BoolTensor(mask))
     if CUDA:
         input_lines = input_lines.cuda()
         output_lines = output_lines.cuda()
@@ -525,16 +475,18 @@ def get_minibatch(lines, tokenizer, index, batch_size, max_len, sort=False, idx=
     return input_lines, output_lines, lens, mask, idx
 
 
-def back_translation_minibatch(src, tgt, config, idx, batch_size, max_len, model, model_type, use_src = True):
+def back_translation_minibatch(datasets, style_ids, n_styles, config, batch_idx, sample_size, max_len, model, model_type):
 
+    """ get minibatch of sentences for backtranslation. These sentences are generated as discrete sequences
+        and thus are not back-propagated through. """
     # get minibatch of inputs, attributes, outputs in other style direction
-    input_content, input_aux, output = minibatch(
-        src, tgt, idx, batch_size, max_len, config['model']['model_type'], use_src = use_src, is_bt = True)
+    input_content, input_aux, _, out_dataset_ordering = minibatch(datasets, style_ids, n_styles, batch_idx, sample_size, max_len, 
+        config['model']['model_type'], is_bt = True)
 
     # decode dataset with greedy, beam search, or top k
-    tokenizer = src['tokenizer']
+    tokenizer = datasets[0]['tokenizer']
     # tgt_pred[i] is list of ids generated by decoding approach
-    s1 = time.time()
+    s = time.time()
     tgt_pred = evaluation.generate_sequences(
         tokenizer,
         model, 
@@ -542,69 +494,100 @@ def back_translation_minibatch(src, tgt, config, idx, batch_size, max_len, model
         get_start_id(tokenizer),
         get_stop_id(tokenizer),
         input_content,
-        input_aux,
-        output
+        input_aux
     )
     logging.info(f'Predicting one BT minibatch took {time.time() - s} seconds')
     preds = evaluation.ids_to_toks(tgt_pred, tokenizer, sort=False)
 
     # get minibatch of decoded inputs, attributes, outputs in original style direction
-    # extract attributes from tgt_pred
     if config['data']['noise'] == 'dropout':
-        attr = None
+        attrs = None
     else:
-        join_path = 'post_attribute_vocab.pkl' if use_src else 'pre_attribute_vocab.pkl'
-        attr_path = os.path.join(config['data']['vocab_dir'], join_path)
-        attr = pickle.load(open(attr_path, "rb"))
-    _, content, _ = list(zip(
-        *[extract_attributes(line.split(), attr, config['data']['noise'], config['data']['dropout_prob'],
-            config['data']['ngram_range'], config['data']['permutation']) for line in preds]
-    ))
-    # print(f'content: {content[0]}')
-    # print(f"attr: {src['attribute'][0]}")
+        attr_path = os.path.join('checkpoints', config['data']['vocab_dir'])
+        attr_path = os.path.join(attr_path, 'style_vocabs.pkl')
+        attrs = pickle.load(open(attr_path, "rb"))
 
-    # create back translation dictionary w/ correct key / value pairs
-    dist_measurer = src['dist_measurer'] if use_src else tgt['dist_measurer']
-    bt_src = {
-        'data': [c + a for c, a in zip(content, src['attribute'])], 
-        'content': content, 
-        'attribute': src['attribute'], 
-        'tokenizer': tokenizer,
-        'dist_measurer': dist_measurer
-    }
+    bt_datasets = []
+    for attr_id_orig, attr_id_middle in enumerate(out_dataset_ordering):
+        
+        # extract attributes from tgt_pred
+        batch_len = len(input_content[0]) // len(out_dataset_ordering)
+        start_idx = attr_id_orig * batch_len
+        stop_idx = (attr_id_orig + 1) * batch_len
+        attribute_vocab = None if atrrs == None else attrs[attr_id_middle]
+        _, content, _ = list(zip(
+            *[extract_attributes(line.split(), attribute_vocab, config['data']['noise'], config['data']['dropout_prob'],
+                config['data']['ngram_range'], config['data']['permutation']) for line in preds[start_idx:stop_idx]]
+        ))
+
+        # create back translation dataset w/ correct key / value pair
+        attributes = datasets[attr_id_orig]['attribute'][batch_idx: batch_idx + batch_len]
+        bt_datasets.append({
+            'data': [c + a for c, a in zip(content, attributes)], 
+            'content': content, 
+            'attribute': attributes, 
+            'tokenizer': tokenizer,
+            'dist_measurer': datasets[attr_id_orig]['dist_measurer']
+        })
+
     # set is_bt false, translate in same direction for evaluation
-    bt_minibatch = minibatch(bt_src, tgt, 0, batch_size, max_len, config['model']['model_type'], use_src = use_src)
+    # set 0 indexing in minibatch
+    bt_minibatch = minibatch(bt_datasets, out_dataset_ordering, n_styles, 
+        batch_idx, sample_size, batch_len, config['model']['model_type'], bt_orig_datasets=datasets)
+     
     return bt_minibatch
 
-def minibatch(src, tgt, idx, batch_size, max_len, model_type, use_src = True, is_test=False, is_bt = False):
-
-    if not is_test:
-        #use_src = random.random() < 0.5
-        in_dataset = src if use_src else tgt
-        
-        # flip attribute ids if generating backtranslation minibatch
-        if is_bt:
-            attribute_id = 1 if use_src else 0
-            out_dataset = tgt if use_src else src
-        else:
-            attribute_id = 0 if use_src else 1
-            out_dataset = in_dataset
-
+def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_type, 
+        is_bt = False, is_adv = False, is_test = False, bt_orig_datasets = None):
+    """ get minibatch of data - functionality determined by where mb is for backtranslation, train, or test
+        datasets is a list of datasets (one of each style) 
+        bt_orig_datasets - original datasets before backtranslation (tgt datasets) """
+    
+    # order lists of input / output datasets depending on whether train, test, BT    
+    in_datasets = [datasets[style_id] for style_id in style_ids]
+    if bt_orig_datasets is None:
+        out_dataset_ordering = []
+        out_datasets = datasets
+        input_idx = idx
+        for i in style_ids:
+            if is_bt: # backtranslation: randomly sample different intermediate style
+                tgt_idx = random.randint(0, n_styles - 1)
+                # could do this more efficiently by sampling whole permutation
+                while tgt_idx == i:
+                    tgt_idx = random.randint(0, n_styles - 1)
+            elif is_adv: # adversarial: randomly sample intermediate style from list of style_ids
+                tgt_idx = random.choice(style_ids)
+                while tgt_idx == i or tgt_idx in out_dataset_ordering:
+                    tgt_idx = random.choice(style_ids)
+            elif is_test: # test translate to next style in list to make eval easier
+                tgt_idx = (i + 1) % n_styles
+            else: # train, sample style
+                tgt_idx = i
+            out_dataset_ordering.append(tgt_idx)
     else:
-        in_dataset = src
-        out_dataset = tgt
-        attribute_id = 1
-
+        # handle special BT case opposite direction
+        #out_dataset_ordering = [i for i in range(n_styles)]
+        out_datasets = bt_orig_datasets
+        # because bt input dataset always starts at idx 0
+        input_idx = 0
+    
+    in_content = [dataset['content'] for dataset in in_datasets]
+    in_data = [dataset['data'] for dataset in in_datasets]
+    out_data = [out_datasets[i]['data'] for i in out_dataset_ordering]
+    out_attributes = [out_datasets[i]['attribute'] for i in out_dataset_ordering]
+    out_dist_measurers = [out_datasets[i]['dist_measurer'] for i in out_dataset_ordering]
+    tokenizer = datasets[0]['tokenizer']
     if model_type == 'delete':
         inputs = get_minibatch(
-            in_dataset['content'], in_dataset['tokenizer'], idx, batch_size, max_len, sort=True)
+            in_content, tokenizer, input_idx, batch_size, max_len, sort=True)
         outputs = get_minibatch(
-            out_dataset['data'], out_dataset['tokenizer'], idx, batch_size, max_len, idx=inputs[-1])
+            out_data, tokenizer, idx, batch_size, max_len, idx=inputs[-1])
 
         # true length could be less than batch_size at edge of data
-        batch_len = len(outputs[0])
-        attribute_ids = [attribute_id for _ in range(batch_len)]
-        attribute_ids = Variable(torch.LongTensor(attribute_ids))
+        batch_len = len(outputs[0]) // len(style_ids)
+        attribute_ids = [[attribute_id] * batch_len for attribute_id in out_dataset_ordering]
+        attribute_ids = [attr_id for id_list in attribute_ids for attr_id in id_list]
+        attribute_ids = Variable(torch.unsqueeze(torch.LongTensor(attribute_ids), 1))
         if CUDA:
             attribute_ids = attribute_ids.cuda()
 
@@ -612,9 +595,9 @@ def minibatch(src, tgt, idx, batch_size, max_len, model_type, use_src = True, is
 
     elif model_type == 'delete_retrieve':
         inputs =  get_minibatch(
-            in_dataset['content'], in_dataset['tokenizer'], idx, batch_size, max_len, sort=True)
+            in_content, tokenizer, input_idx, batch_size, max_len, sort=True)
         outputs = get_minibatch(
-            out_dataset['data'], out_dataset['tokenizer'], idx, batch_size, max_len, idx=inputs[-1])
+            out_data, tokenizer, idx, batch_size, max_len, idx=inputs[-1])
 
         if is_test:
             # This dist_measurer has sentence attributes for values, so setting 
@@ -622,28 +605,31 @@ def minibatch(src, tgt, idx, batch_size, max_len, model_type, use_src = True, is
             # attribute. So we're still getting attributes even though
             # the method is being fed content. 
             attributes =  get_minibatch(
-                in_dataset['content'], out_dataset['tokenizer'], idx, 
+                in_content, tokenizer, input_idx, 
                 batch_size, max_len, idx=inputs[-1],
-                dist_measurer=out_dataset['dist_measurer'], sample_rate=1.0)
+                dist_measurer=out_dist_measurers, sample_rate=1.0)
         else:
             attributes =  get_minibatch(
-                out_dataset['attribute'], out_dataset['tokenizer'], idx, 
+                out_attributes, tokenizer, idx, 
                 batch_size, max_len, idx=inputs[-1],
-                dist_measurer=out_dataset['dist_measurer'], sample_rate=0.1)
+                dist_measurer=out_dist_measurers, sample_rate=0.1)
 
     elif model_type == 'seq2seq':
         # ignore the in/out dataset stuff
         inputs = get_minibatch(
-            src['data'], src['tokenizer'], idx, batch_size, max_len, sort=True)
+            in_data, tokenizer, input_idx, batch_size, max_len, sort=True)
         outputs = get_minibatch(
-            tgt['data'], tgt['tokenizer'], idx, batch_size, max_len, idx=inputs[-1])
+            out_data, tokenizer, idx, batch_size, max_len, idx=inputs[-1])
         attributes = (None, None, None, None, None)
 
     else:
         raise Exception('Unsupported model_type: %s' % model_type)
 
-    return inputs, attributes, outputs
-
+    # return ds order in back_translation regime, so these attrs can be extracted
+    if is_bt:
+        return inputs, attributes, outputs, out_dataset_ordering
+    else:
+        return inputs, attributes, outputs
 
 def unsort(arr, idx):
     """unsort a list given idx: a list of each element's 'origin' index pre-sorting

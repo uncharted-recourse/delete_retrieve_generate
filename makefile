@@ -8,8 +8,7 @@ train:
 	@echo "Cleaning up containers"
 	docker system prune
 	@echo "Building image"
-	docker build -t dar_train -f train.dockerfile .
-	@echo "training using nvidia runtime"
-	docker run --rm -v /Users/jgleason/Documents/NewKnowledge/ASED/delete_retrieve_generate:/root dar_train \
-		python train.py --config config.json --bleu
+	docker build -t style_train -f train.dockerfile .
+	@echo "Running image"
+	docker run --rm -t -i style_train bash
 

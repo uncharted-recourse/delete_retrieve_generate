@@ -17,7 +17,7 @@ setup(
         "sklearn",
         "six==1.12.0",
         "tensorboardX==1.7",
-        "torch==1.1.0",
+        "torch==1.2.0",
         "torchvision==0.3.0",
         "pytorch_transformers",
     ],
