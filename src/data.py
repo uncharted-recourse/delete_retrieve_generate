@@ -425,7 +425,7 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
     # FORCE NO SORTING because we care about the order of outputs
     #   to compare across systems
 
-    lines = [lines[index:index + batch_size] for lines in lines_even]
+    lines = [line for lines in lines_even for line in lines[index:index + batch_size]]
     if dist_measurer is not None:
         lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
 
@@ -577,7 +577,7 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
     tokenizer = datasets[0]['tokenizer']
     if model_type == 'delete':
         inputs = get_minibatch(
-            in_content, tokenizer, input_idx, batch_size, max_len, sort=True)
+            in_content, tokenizer, input_idx, batch_size, max_len, sort=False)
         outputs = get_minibatch(
             out_data, tokenizer, idx, batch_size, max_len, idx=inputs[-1])
 
@@ -593,7 +593,7 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
 
     elif model_type == 'delete_retrieve':
         inputs =  get_minibatch(
-            in_content, tokenizer, input_idx, batch_size, max_len, sort=True)
+            in_content, tokenizer, input_idx, batch_size, max_len, sort=False)
         outputs = get_minibatch(
             out_data, tokenizer, idx, batch_size, max_len, idx=inputs[-1])
 
@@ -615,7 +615,7 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
     elif model_type == 'seq2seq':
         # ignore the in/out dataset stuff
         inputs = get_minibatch(
-            in_data, tokenizer, input_idx, batch_size, max_len, sort=True)
+            in_data, tokenizer, input_idx, batch_size, max_len, sort=False)
         outputs = get_minibatch(
             out_data, tokenizer, idx, batch_size, max_len, idx=inputs[-1])
         attributes = (None, None, None, None, None)

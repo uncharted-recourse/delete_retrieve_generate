@@ -180,8 +180,9 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
         # replace with new checkpoint
         torch.save(model.state_dict(), working_dir + f'/model.{epoch}.ckpt')
-        [torch.save(s_discriminator.state_dict(), working_dir + f'/s_discriminator_{idx}.{epoch}.ckpt')
-            for idx, s_discriminator in enumerate(s_discriminators)]
+        if s_discriminators is not None:
+            [torch.save(s_discriminator.state_dict(), working_dir + f'/s_discriminator_{idx}.{epoch}.ckpt')
+                for idx, s_discriminator in enumerate(s_discriminators)]
 
         best_metric = cur_metric
         best_epoch = epoch - 1

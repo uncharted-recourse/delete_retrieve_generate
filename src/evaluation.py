@@ -401,11 +401,11 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
     min_content_length = min(content_lengths)
     upper_lim = min(min_content_length, num_samples * sample_size)
     for j in range(0, upper_lim, sample_size):
-        sys.stdout.write("\r%s/%s..." % (j * style_ids, upper_lim * style_ids))
+        sys.stdout.write("\r%s/%s..." % (j * len(style_ids), upper_lim * len(style_ids)))
         sys.stdout.flush()
 
         # get batch
-        src_packed, auxs_packed, tgt_packed = data.minibatch(test_data, j, style_ids, len(content_lengths), 
+        src_packed, auxs_packed, tgt_packed = data.minibatch(test_data, style_ids, len(style_ids), j, 
             sample_size, config['data']['max_len'], config['model']['model_type'], is_test = True)
         _, output_lines_src, _, _, indices = src_packed
         input_ids_aux, _, _, _, _ = auxs_packed
@@ -425,14 +425,14 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
 
         # convert inputs/preds/targets/aux to human-readable form
         for i in range(len(test_data)):
-            inputs[i].append(ids_to_toks(output_lines_src[i:(i+1)*sample_size], tokenizer, indices=indices))
-            preds[i].append(ids_to_toks(tgt_pred[i:(i+1)*sample_size], tokenizer, indices=indices))
-            ground_truths[i].append(ids_to_toks(output_lines_tgt[i:(i+1)*sample_size], tokenizer, indices=indices))
+            inputs[i].append(ids_to_toks(output_lines_src[i:(i+1)*sample_size], tokenizer, sort = False))
+            preds[i].append(ids_to_toks(tgt_pred[i:(i+1)*sample_size], tokenizer, sort = False))
+            ground_truths[i].append(ids_to_toks(output_lines_tgt[i:(i+1)*sample_size], tokenizer, sort = False))
     
             if config['model']['model_type'] == 'delete':
                 auxs[i].append([[str(x)] for x in input_ids_aux[i:(i+1)*sample_size].data.cpu().numpy()]) # because of list comp in inference_metrics()
             elif config['model']['model_type'] == 'delete_retrieve':
-                auxs[i].append(ids_to_toks(input_ids_aux[i:(i+1)*sample_size], tokenizer, indices = indices))
+                auxs[i].append(ids_to_toks(input_ids_aux[i:(i+1)*sample_size], tokenizer, sort = False))
             elif config['model']['model_type'] == 'seq2seq':
                 auxs[i].append(['None' for _ in range(sample_size)])
 
