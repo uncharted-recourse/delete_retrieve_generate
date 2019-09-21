@@ -425,8 +425,7 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
     # FORCE NO SORTING because we care about the order of outputs
     #   to compare across systems
 
-    lines = [line[:max_len] for lines in lines_even for line in lines[index:index + batch_size]]
-    lens = [len(line) - 1 for line in lines]
+    lines = [lines[index:index + batch_size] for lines in lines_even]
     if dist_measurer is not None:
         lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
 
@@ -514,7 +513,7 @@ def back_translation_minibatch(datasets, style_ids, n_styles, config, batch_idx,
         batch_len = len(input_content[0]) // len(out_dataset_ordering)
         start_idx = attr_id_orig * batch_len
         stop_idx = (attr_id_orig + 1) * batch_len
-        attribute_vocab = None if atrrs == None else attrs[attr_id_middle]
+        attribute_vocab = None if attrs == None else attrs[attr_id_middle]
         _, content, _ = list(zip(
             *[extract_attributes(line.split(), attribute_vocab, config['data']['noise'], config['data']['dropout_prob'],
                 config['data']['ngram_range'], config['data']['permutation']) for line in preds[start_idx:stop_idx]]
@@ -532,7 +531,7 @@ def back_translation_minibatch(datasets, style_ids, n_styles, config, batch_idx,
 
     # set is_bt false, translate in same direction for evaluation
     # set 0 indexing in minibatch
-    bt_minibatch = minibatch(bt_datasets, out_dataset_ordering, n_styles, 
+    bt_minibatch = minibatch(bt_datasets, style_ids, n_styles, 
         batch_idx, sample_size, batch_len, config['model']['model_type'], bt_orig_datasets=datasets)
      
     return bt_minibatch
@@ -552,14 +551,13 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
         for i in style_ids:
             if is_bt: # backtranslation: randomly sample different intermediate style
                 tgt_idx = random.randint(0, n_styles - 1)
-                # could do this more efficiently by sampling whole permutation
                 while tgt_idx == i:
                     tgt_idx = random.randint(0, n_styles - 1)
             elif is_adv: # adversarial: randomly sample intermediate style from list of style_ids
                 tgt_idx = random.choice(style_ids)
                 while tgt_idx == i or tgt_idx in out_dataset_ordering:
                     tgt_idx = random.choice(style_ids)
-            elif is_test: # test translate to next style in list to make eval easier
+            elif is_test: # test translate to next style in list for consistent eval over time
                 tgt_idx = (i + 1) % n_styles
             else: # train, sample style
                 tgt_idx = i

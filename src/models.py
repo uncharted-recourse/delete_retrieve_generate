@@ -52,34 +52,44 @@ def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None, map_loc
     else:
         return model, 0
 
-def initialize_inference_model(config=None):
-    """ initialize inference model for deployment"""
+def initialize_inference_model(config, input_lines = None, map_location = 'cpu'):
+    """ initialize inference model for deployment """
 
-    # read target data from training corpus to estalish attribute vocabulary / similarity
-    log("reading training data from style corpus'", level="debug")
-    
-    src, tgt = data.read_nmt_data(
-        src=config['data']['src'], 
-        tgt=config['data']['tgt'],
-        config=config,
-        cache_dir=config['data']['vocab'],
-        train_src = True,
-        train_tgt=True
-    )
+    # instantiate tokenizer (cached files copied to image)
+    log('hellllo', level='debug')
+    tokenizer = data.get_tokenizer(encoder = config['data']['tokenizer'], 
+        cache_dir=os.path.join("checkpoints", config['data']['vocab_dir']))
 
-    log("initializing model", level="debug")
-    padding_id = data.get_padding_id(src['tokenizer'])
-    model = SeqModel(
-        src_vocab_size=len(src['tokenizer']),
-        tgt_vocab_size=len(src['tokenizer']),
+    # init model
+    padding_id = data.get_padding_id(tokenizer)
+    vocab_size = len(tokenizer)
+    model = FusedSeqModel(
+        src_vocab_size=vocab_size,
+        tgt_vocab_size=vocab_size,
         pad_id_src=padding_id,
         pad_id_tgt=padding_id,
         config=config
     )
-    if CUDA:
-        model = model.cuda()
+    for param in model.parameters():
+        param.requires_grad = False
+    model.eval()
 
-    return model, src, tgt
+    # attempt to load model from working_dir in config
+    model, _ = attempt_load_model(
+        model=model,
+        checkpoint_dir=f"checkpoints/{config['data']['working_dir']}",
+        map_location=torch.device(map_location)
+    )
+
+    # if delete + retrieve paradigm, produce training data dictionaries for attribute
+    # retrieval at inference time
+    if input_lines is not None:
+        train_data = data.read_nmt_data(input_lines, len(input_lines), config, train_data=None,
+            cache_dir = config['data']['vocab_dir'])
+    else:
+        train_data = None
+
+    return model, tokenizer, train_data
 
 class SeqModel(nn.Module):
     def __init__(
@@ -255,7 +265,7 @@ class SeqModel(nn.Module):
             attr_emb = torch.mean(torch.stack(attr_embs, dim=1), dim=1)
 
             if self.options['encoder'] == 'lstm':
-                _, (a_ht, a_ct) = self.attribute_encoder(attr_emb, attrlens, attrmask)
+                _, (a_ht, a_ct) = self.attribute_encoder(attr_emb, attrlens)
                 if self.options['bidirectional']:
                     a_ht = torch.cat((a_ht[-1], a_ht[-2]), 1)
                     a_ct = torch.cat((a_ct[-1], a_ct[-2]), 1)

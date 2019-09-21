@@ -189,7 +189,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
     losses = []
     idx = max(content_lengths)
     batch_idx = 0
-    while idx >= 0:
+    while idx > 0:
 
         if args.overfit:
             idx = 50
@@ -203,6 +203,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         style_ids = [i for i, corpus in enumerate(train_data) if idx in range(len(corpus['data']) + 1)]
         train_sample_size = batch_size // len(style_ids)
         idx -= train_sample_size
+        idx = 0 if idx < 0 else idx
 
         train_loss, s_losses = evaluation.calculate_loss(train_data, style_ids, n_styles, config, idx, train_sample_size, max_length, 
             config['model']['model_type'], model, s_discriminators, loss_crit, bt_ratio = config['training']['bt_ratio'])
@@ -282,13 +283,17 @@ for epoch in range(start_epoch, config['training']['epochs']):
             [d_scheduler.step(d_loss) for d_scheduler, d_loss in zip(d_schedulers, d_dev_losses)]
             
              # write information to tensorboard
-            [writer.add_scalar('eval/loss_discriminator_{}', d_dev_loss, epoch) for idx, d_dev_loss in enumerate(d_dev_losses)]
+            [writer.add_scalar('eval/loss_discriminator_style_{}', d_dev_loss, epoch) for idx, d_dev_loss in enumerate(d_dev_losses)]
     # write predictions and ground truths to checkpoint dir
     if args.bleu and epoch >= config['training'].get('inference_start_epoch', 1):
         
         num_samples = config['training']['num_samples']
-        cur_metric, edit_distance, inputs, preds, golds, auxs = evaluation.inference_metrics(
+        cur_metrics, edit_distances, inputs, preds, golds, auxs = evaluation.inference_metrics(
             model, test_data, sample_size, num_samples, config)
+        
+        # metrics averaged over metric for each style
+        cur_metric = np.mean(cur_metrics)
+        edit_distance = np.mean(edit_distances)
 
         with open(working_dir + '/auxs.%s' % epoch, 'w') as f:
             f.write('\n'.join(auxs) + '\n')
@@ -299,8 +304,9 @@ for epoch in range(start_epoch, config['training']['epochs']):
         with open(working_dir + '/golds.%s' % epoch, 'w') as f:
             f.write('\n'.join(golds) + '\n')
 
-        writer.add_scalar('eval/edit_distance', edit_distance, epoch)
-        writer.add_scalar('eval/bleu', cur_metric, epoch)
+        # write edit distance and bleu metrics separately for each style
+        [writer.add_scalar(f'eval/edit_distance_target_style_{(i + 1) % n_styles}', e, epoch) for i, e in enumerate(edit_distances)]
+        [writer.add_scalar(f'eval/bleu_target_style_{(i + 1) % n_styles}', c, epoch) for i, c in enumerate(cur_metrics)]
 
     else:
         cur_metric = dev_loss

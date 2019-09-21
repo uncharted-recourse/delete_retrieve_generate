@@ -390,17 +390,18 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
 def decode_dataset(model, test_data, sample_size, num_samples, config):
     """Evaluate model on num_samples of size sample_size"""
 
-    inputs = []
-    preds = []
-    auxs = []
-    ground_truths = []
+    # create list of lists to separate translations for each style
+    inputs = [[]]
+    preds = [[]]
+    auxs = [[]]
+    ground_truths = [[]]
 
     content_lengths = [len(datum['content']) for datum in test_data]
     style_ids = [i for i in range(len(content_lengths))]
     min_content_length = min(content_lengths)
     upper_lim = min(min_content_length, num_samples * sample_size)
     for j in range(0, upper_lim, sample_size):
-        sys.stdout.write("\r%s/%s..." % (j, upper_lim))
+        sys.stdout.write("\r%s/%s..." % (j * style_ids, upper_lim * style_ids))
         sys.stdout.flush()
 
         # get batch
@@ -423,16 +424,17 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
         )
 
         # convert inputs/preds/targets/aux to human-readable form
-        inputs += ids_to_toks(output_lines_src, tokenizer, indices=indices)
-        preds += ids_to_toks(tgt_pred, tokenizer, indices=indices)
-        ground_truths += ids_to_toks(output_lines_tgt, tokenizer, indices=indices)
-        
-        if config['model']['model_type'] == 'delete':
-            auxs += [[str(x)] for x in input_ids_aux.data.cpu().numpy()] # because of list comp in inference_metrics()
-        elif config['model']['model_type'] == 'delete_retrieve':
-            auxs += ids_to_toks(input_ids_aux, tokenizer, indices = indices)
-        elif config['model']['model_type'] == 'seq2seq':
-            auxs += ['None' for _ in range(len(tgt_pred))]
+        for i in range(len(test_data)):
+            inputs[i].append(ids_to_toks(output_lines_src[i:(i+1)*sample_size], tokenizer, indices=indices))
+            preds[i].append(ids_to_toks(tgt_pred[i:(i+1)*sample_size], tokenizer, indices=indices))
+            ground_truths[i].append(ids_to_toks(output_lines_tgt[i:(i+1)*sample_size], tokenizer, indices=indices))
+    
+            if config['model']['model_type'] == 'delete':
+                auxs[i].append([[str(x)] for x in input_ids_aux[i:(i+1)*sample_size].data.cpu().numpy()]) # because of list comp in inference_metrics()
+            elif config['model']['model_type'] == 'delete_retrieve':
+                auxs[i].append(ids_to_toks(input_ids_aux[i:(i+1)*sample_size], tokenizer, indices = indices))
+            elif config['model']['model_type'] == 'seq2seq':
+                auxs[i].append(['None' for _ in range(sample_size)])
 
     return inputs, preds, ground_truths, auxs
 
@@ -441,16 +443,15 @@ def inference_metrics(model, test_data, sample_size, num_samples, config):
     """ decode and evaluate bleu """
     inputs, preds, ground_truths, auxs = decode_dataset(
         model, test_data, sample_size, num_samples, config)
-    bleu = get_bleu(preds, ground_truths)
-    edit_distance = get_edit_distance(preds, ground_truths)
+    bleus = [get_bleu(p, truth) for p, truth in zip(preds, ground_truths)]
+    edit_distances = [get_edit_distance(p, truth) for p, truth in zip(preds, ground_truths)]
 
-    inputs = [''.join(seq) for seq in inputs]
-    preds = [''.join(seq) for seq in preds]
-    ground_truths = [''.join(seq) for seq in ground_truths]
-    auxs = [''.join(seq) for seq in auxs]
+    inputs = [''.join(seq) for ins in inputs for seq in ins]
+    preds = [''.join(seq) for p in preds for seq in p]
+    ground_truths = [''.join(seq) for g in ground_truths for seq in g]
+    auxs = [''.join(seq) for a in auxs for seq in a]
 
-    return bleu, edit_distance, inputs, preds, ground_truths, auxs
-
+    return bleus, edit_distances, inputs, preds, ground_truths, auxs
 
 def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
     """ evaluate log perplexity WITHOUT decoding
@@ -479,111 +480,70 @@ def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
             d_means = None
     return np.mean(losses), d_means
 
-def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True, remove_attributes = True):
+def predict_text(input_text, tokenizer, style_ids, config, model, train_data = None):
     """ translate input sequence (not in train / test corpora) to another style (s). 
-        we don't apply noising strategy to this input (should we??)
+        train_data only necessary in delete and retrieve framework to create tfidf similarity
+        between input_text and training corpii to extract appropriate attributes for embedding. 
     """
+
     start_time = time.time()
 
-    # tokenize input data using cached tokenizer and attribute vocab
-    tokenized_text, tokenizer = data.encode_text_data([text],
-        encoder = config['data']['tokenizer'], 
-        cache_dir=cache_dir
-    )
-    if forward:
-        attr_path = os.path.join(cache_dir, 'pre_attribute_vocab.pkl')
+    # remove attribute tokens from input according if they have been marked
+    # (if word / ngram attributes pre-calculated they will be cached and copied to image)
+    start = data.get_start_id(tokenizer)
+    stop = data.get_stop_id(tokenizer)
+    if config['data']['noise'] == 'word_attributes' or config['data']['noise'] == 'ngram_attributes':
+        attr_path = os.path.join("checkpoints", config['data']['vocab_dir'], 'style_vocabs.pkl')
+        attrs = pickle.load(open(attr_path, "rb"))
+
+        # iteratively remove each style's attributes
+        for attr in attrs:
+            _, input_content, _ = data.extract_attributes(input_content, attr, config['data']['noise'], 
+                config['data']['dropout_prob'], config['data']['ngram_range'], config['data']['permutation'])
+        
+        # get attribute examples by measuring distance to train_data corpii with tfidf
+        train_data = [train_data[style_id] for style_id in style_ids]
+        dist_measurers = [data.CorpusSearcher(
+            query_corpus=[' '.join(x) for x in input_content],
+            key_corpus=[' '.join(x) for x in train_content],
+            value_corpus=[' '.join(x) for x in train_attributes],
+            vectorizer=data.TfidfVectorizer(),
+            make_binary=False)
+            for (_, train_content, train_attributes) in train_data]
+
+        # last two args are sample rate (always 1.0) and key_idx (always 0)
+        input_attributes = [data.sample_replace([input_content], tokenizer, dist_m, 1.0, 0) for dist_m in dist_measurers]
+
+        # tokenize attributes
+        input_attr = torch.LongTensor([
+            [start] + 
+            tokenizer.encode(" ".join(attr))[:max_len - 2] + 
+            [stop] for attr in input_attributes])
+        attr_length = [max([len(attr) for attr in input_attr])]
+        attr_mask = torch.BoolTensor([([False] * attr_length)])
+
     else:
-        attr_path = os.path.join(cache_dir, 'post_attribute_vocab.pkl')
-    attr = pickle.load(open(attr_path, "rb"))
+        input_attributes = torch.LongTensor([style_ids])
+        attr_length = None
+        attr_mask = None
 
-    if remove_attributes:
-        src_lines, src_content, src_attribute = list(zip(
-            *[data.extract_attributes(line, attr, config['data']['noise'], config['data']['dropout_prob'],
-                config['data']['ngram_range'], config['data']['permutation']) for line in tokenized_text]
-        ))
-    
-    # convert content to tokens
-    max_len = config['data']['max_len']
-    start_id = data.get_start_id(tokenizer)
-    stop_id = data.get_stop_id(tokenizer)
-    lines = [[start_id] + l[:max_len] + [stop_id] for l in input_data]
-    content_length = [len(l) - 1 for l in lines]
-    content_mask = [([1] * l) for l in content_length]
-    content = [[int(w) for w in l[:-1]] for l in lines]
+    # tokenize content 
+    input_content = torch.LongTensor([
+        [start] + 
+        tokenizer.encode(" ".join(input_content))[:max_len - 2] + 
+        [stop]])
+    content_length = [len(input_content)]
+    content_mask = torch.BoolTensor([([False] * content_length)])
 
-    # convert attributes to tokens or binary variables
-    attributes_len = None
-    attributes_mask = None
-    if config['model']['model_type'] == 'delete':
-        if forward:
-            attributes = [1]
-        else:
-            attributes = [0]
-    elif config['model']['model_type'] == 'delete_retrieve':
-        if forward:
-            attributes = data.sample_replace(lines, tgt['dist_measurer'], 1.0, 0)
-        else:
-            attributes = data.sample_replace(lines, src['dist_measurer'], 1.0, 0)
-        attributes = [[int(w) for w in l[:-1]] for l in attributes]
-        attributes_len = [len(l) - 1 for l in attributes]
-        attributes_mask = [([1] * l) for l in attributes_len]
-        attributes_mask = Variable(torch.LongTensor(attributes_mask))
-    else:
-        raise Exception('Currently only "delete" and "delete_retrieve" models are supported for predict_text()')
-    log(f'time for tokenization: {time.time() - start_time}', level='debug')
-    
-    # convert to torch objects for prediction
-    content = Variable(torch.LongTensor(content))
-    content_mask = Variable(torch.FloatTensor(content_mask))
-    attributes = Variable(torch.LongTensor(attributes))
-
-    if CUDA:
-        content = content.cuda()
-        content_mask = content_mask.cuda()
-        attributes = attributes.cuda()
-        attributes_mask = attributes_mask.cuda()
-
-    # make predictions
-    model.eval()
-    if config['model']['decode'] == 'greedy':
-        tgt_pred = decode_minibatch_greedy(
-            max_len, start_id, 
-            model, content, content_length, content_mask,
-            attributes, attributes_len, attributes_mask
-        )
-    elif config['model']['decode'] == 'beam_search':
-        start_time = time.time()
-        if config['model']['model_type'] == 'delete_retrieve':
-            tgt_pred = torch.stack([beam_search_decode(
-                config['data']['max_len'], start_id, stop_id, model, 
-                i, [i_l], i_m, a, [a_l], a_m,
-                data.get_padding_id(tokenizer), config['model']['beam_width']) for 
-                i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
-                input_ids_aux, auxlens, auxmask)])
-        elif config['model']['model_type'] == 'delete':
-            input_ids_aux = input_ids_aux.unsqueeze(1)
-            tgt_pred = torch.stack([beam_search_decode(
-                config['data']['max_len'], start_id, stop_id, model, 
-                i, [i_l], i_m, a, None, None,
-                data.get_padding_id(tokenizer), config['model']['beam_width']) for 
-                i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
-                input_ids_aux)])
-        log(f'beam search decoding took: {time.time() - start_time}', level='debug')
-    elif config['model']['decode'] == 'top_k':
-        start_time = time.time()
-        tgt_pred = decode_top_k(
-            max_len, start_id, stop_id,
-            model, content, content_length, content_mask,
-            attributes, attributes_len, attributes_mask, 
-            config['model']['k'], config['model']['temperature']
-        )
-        log(f'top k decoding took: {time.time() - start_time}', level='debug')
-    log(f'time for predictions: {time.time() - start_time}', level='debug')
+    # decode according to decoding strategy
+    content = (input_content, _, content_length, content_mask, _)
+    attributes = (input_attr, _, attr_length, attr_mask, _)
+    output = generate_sequences(tokenizer, model, config, start, stop, content, attributes)
 
     # convert tokens to text
-    preds = []
-    preds += ids_to_toks(tgt_pred, tokenizer, sort=False)
-    return ' '.join(preds[0])
+    preds = ' '.join(ids_to_toks(output, tokenizer, sort=False))
+    log(f'generating style from input text took: {time.time() - start_time} seconds', level='debug')
+    return preds
 
 def sample_softmax(logits, temperature=1.0, num_samples=1):
     """ sample from softmax distribution over tokens with temperature"""
