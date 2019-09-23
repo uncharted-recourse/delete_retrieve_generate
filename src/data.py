@@ -435,7 +435,7 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
         [get_stop_id(tokenizer)] for line in lines]
 
     lens = [len(line) - 1 for line in lines]
-    
+
     input_lines = [
         line[:-1] +
         [get_padding_id(tokenizer)] * (max_len - len(line) + 1)
@@ -624,7 +624,7 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
         raise Exception('Unsupported model_type: %s' % model_type)
 
     # return ds order in back_translation regime, so these attrs can be extracted
-    if is_bt:
+    if is_bt or is_adv:
         return inputs, attributes, outputs, out_dataset_ordering
     else:
         return inputs, attributes, outputs

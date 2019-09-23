@@ -146,7 +146,6 @@ epoch_loss = []
 start_since_last_report = time.time()
 words_since_last_report = 0
 losses_since_last_report = []
-losses_discrim = [[]]
 best_metric = 0.0
 best_epoch = 0
 cur_metric = 0.0 # log perplexity or BLEU

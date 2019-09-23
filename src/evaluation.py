@@ -327,13 +327,14 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
 
     # take off the gpu
     tok_seqs = tok_seqs.cpu().numpy()
+
     # convert to toks, delete any special tokens (bos, eos, pad)
     start_id = data.get_start_id(tokenizer)
     stop_id = data.get_stop_id(tokenizer)
     tok_seqs = [line[1:] if line[0] == start_id else line for line in tok_seqs]
     tok_seqs = [np.split(line, np.where(line == stop_id)[0])[0] for line in tok_seqs]
     tok_seqs = [tokenizer.decode(line) for line in tok_seqs]
-    
+
     # unsort
     if sort:
          return data.unsort(tok_seqs, indices)
@@ -390,16 +391,17 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
 def decode_dataset(model, test_data, sample_size, num_samples, config):
     """Evaluate model on num_samples of size sample_size"""
 
-    # create list of lists to separate translations for each style
-    inputs = [[]]
-    preds = [[]]
-    auxs = [[]]
-    ground_truths = [[]]
-
     content_lengths = [len(datum['content']) for datum in test_data]
     style_ids = [i for i in range(len(content_lengths))]
     min_content_length = min(content_lengths)
     upper_lim = min(min_content_length, num_samples * sample_size)
+
+    # create list of lists to separate translations for each style
+    inputs = [[] for i in range(len(style_ids))]
+    preds = [[] for i in range(len(style_ids))]
+    auxs = [[] for i in range(len(style_ids))]
+    ground_truths = [[] for i in range(len(style_ids))]
+
     for j in range(0, upper_lim, sample_size):
         sys.stdout.write("\r%s/%s..." % (j * len(style_ids), upper_lim * len(style_ids)))
         sys.stdout.flush()
@@ -425,16 +427,16 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
 
         # convert inputs/preds/targets/aux to human-readable form
         for i in range(len(test_data)):
-            inputs[i].append(ids_to_toks(output_lines_src[i:(i+1)*sample_size], tokenizer, sort = False))
-            preds[i].append(ids_to_toks(tgt_pred[i:(i+1)*sample_size], tokenizer, sort = False))
-            ground_truths[i].append(ids_to_toks(output_lines_tgt[i:(i+1)*sample_size], tokenizer, sort = False))
+            inputs[i] += ids_to_toks(output_lines_src[i:(i+1)*sample_size], tokenizer, sort = False)
+            preds[i] += ids_to_toks(tgt_pred[i:(i+1)*sample_size], tokenizer, sort = False)
+            ground_truths[i] += ids_to_toks(output_lines_tgt[i:(i+1)*sample_size], tokenizer, sort = False)
     
             if config['model']['model_type'] == 'delete':
-                auxs[i].append([[str(x)] for x in input_ids_aux[i:(i+1)*sample_size].data.cpu().numpy()]) # because of list comp in inference_metrics()
+                auxs[i]+= [[str(x[0])] for x in input_ids_aux[i:(i+1)*sample_size].data.cpu().numpy()] # because of list comp in inference_metrics()
             elif config['model']['model_type'] == 'delete_retrieve':
-                auxs[i].append(ids_to_toks(input_ids_aux[i:(i+1)*sample_size], tokenizer, sort = False))
+                auxs[i] += ids_to_toks(input_ids_aux[i:(i+1)*sample_size], tokenizer, sort = False)
             elif config['model']['model_type'] == 'seq2seq':
-                auxs[i].append(['None' for _ in range(sample_size)])
+                auxs[i] += ['None' for _ in range(sample_size)]
 
     return inputs, preds, ground_truths, auxs
 
@@ -480,7 +482,7 @@ def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
             d_means = None
     return np.mean(losses), d_means
 
-def predict_text(input_text, tokenizer, style_ids, config, model, train_data = None):
+def predict_text(input_content, tokenizer, style_ids, config, model, train_data = None):
     """ translate input sequence (not in train / test corpora) to another style (s). 
         train_data only necessary in delete and retrieve framework to create tfidf similarity
         between input_text and training corpii to extract appropriate attributes for embedding. 
@@ -492,6 +494,7 @@ def predict_text(input_text, tokenizer, style_ids, config, model, train_data = N
     # (if word / ngram attributes pre-calculated they will be cached and copied to image)
     start = data.get_start_id(tokenizer)
     stop = data.get_stop_id(tokenizer)
+    input_content = input_content.split()
     if config['data']['noise'] == 'word_attributes' or config['data']['noise'] == 'ngram_attributes':
         attr_path = os.path.join("checkpoints", config['data']['vocab_dir'], 'style_vocabs.pkl')
         attrs = pickle.load(open(attr_path, "rb"))
@@ -517,9 +520,9 @@ def predict_text(input_text, tokenizer, style_ids, config, model, train_data = N
         # tokenize attributes
         input_attr = torch.LongTensor([
             [start] + 
-            tokenizer.encode(" ".join(attr))[:max_len - 2] + 
-            [stop] for attr in input_attributes])
-        attr_length = [max([len(attr) for attr in input_attr])]
+            tokenizer.encode(" ".join(attr))[:config['data']['max_len'] - 2]
+            for attr in input_attributes])
+        attr_length = [max([attr.shape[1] for attr in input_attr])]
         attr_mask = torch.BoolTensor([([False] * attr_length)])
 
     else:
@@ -530,14 +533,13 @@ def predict_text(input_text, tokenizer, style_ids, config, model, train_data = N
     # tokenize content 
     input_content = torch.LongTensor([
         [start] + 
-        tokenizer.encode(" ".join(input_content))[:max_len - 2] + 
-        [stop]])
-    content_length = [len(input_content)]
-    content_mask = torch.BoolTensor([([False] * content_length)])
+        tokenizer.encode(" ".join(input_content))[:config['data']['max_len'] - 2]])
+    content_length = [input_content.shape[1]]
+    content_mask = torch.BoolTensor([([False] * content_length[0])])
 
     # decode according to decoding strategy
-    content = (input_content, _, content_length, content_mask, _)
-    attributes = (input_attr, _, attr_length, attr_mask, _)
+    content = (input_content, None, content_length, content_mask, None)
+    attributes = (input_attributes, None, attr_length, attr_mask, None)
     output = generate_sequences(tokenizer, model, config, start, stop, content, attributes)
 
     # convert tokens to text

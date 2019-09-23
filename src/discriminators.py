@@ -6,6 +6,13 @@ from src import models
 from src.cuda import CUDA
 import logging
 import numpy as np
+import os
+from utils.log_func import get_log_func
+
+log_level = os.getenv("LOG_LEVEL", "WARNING")
+root_logger = logging.getLogger()
+root_logger.setLevel(log_level)
+log = get_log_func(__name__)
 
 # L_s - discriminate between G(z, s) and G(z,s) ??
     # inputs = final unrolled hidden states of decoder on generated x_s and 
@@ -120,7 +127,7 @@ def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, o
     # (transformer) from teacher-forced example, for each style separately
     s_discriminators = [ConvNet(
         num_classes = 2, 
-        num_channels = [2,4], 
+        num_channels = [100,200], 
         kernel_sizes = [32,64], 
         conv_dim = 1, 
         pooling_stride = 4,
@@ -186,7 +193,7 @@ class LanguageModel(nn.Module):
 
         if model_name not in models.keys():
             raise Exception("Language model must be one of 'gpt', 'gpt2'")#, 'xlnet', 'transformerxl'")
-
+    
         # !! assume that language model and seq2seq are using same tokenization !!
         self.lang_model = models[model_name].from_pretrained(model_weights[model_name], 
             cache_dir=cache_dir

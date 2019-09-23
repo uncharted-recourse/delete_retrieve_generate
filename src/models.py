@@ -56,7 +56,6 @@ def initialize_inference_model(config, input_lines = None, map_location = 'cpu')
     """ initialize inference model for deployment """
 
     # instantiate tokenizer (cached files copied to image)
-    log('hellllo', level='debug')
     tokenizer = data.get_tokenizer(encoder = config['data']['tokenizer'], 
         cache_dir=os.path.join("checkpoints", config['data']['vocab_dir']))
 
@@ -71,7 +70,7 @@ def initialize_inference_model(config, input_lines = None, map_location = 'cpu')
         config=config
     )
     for param in model.parameters():
-        param.requires_grad = False
+       param.requires_grad = False
     model.eval()
 
     # attempt to load model from working_dir in config
@@ -246,7 +245,7 @@ class SeqModel(nn.Module):
 
         if self.model_type == 'delete':
             a_hts = self.attribute_embedding(input_attr)
-            a_ht = torch.mean(torch.stack(a_hts, dim=1), dim=1) if a_hts.shape[1] > 1 else a_hts.squeeze(1)
+            a_ht = torch.mean(a_hts, dim=1) if a_hts.shape[1] > 1 else a_hts.squeeze(1)
             if self.options['encoder'] == 'lstm':
                 c_t = torch.cat((c_t_encoder, a_ht), -1)
                 c_t = self.c_bridge(c_t)
