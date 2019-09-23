@@ -97,7 +97,6 @@ class StackedAttentionLSTM(nn.Module):
         super(StackedAttentionLSTM, self).__init__()
         self.options=config['model']
 
-
         self.dropout = nn.Dropout(self.options['dropout'])
 
         self.layers = []
@@ -130,9 +129,16 @@ class StackedAttentionLSTM(nn.Module):
 
 class TransformerDecoder(nn.Module):
     r""" simple wrapper for a pytorch transformer encoder """
-    def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4):
+    def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4, max_len = 50, pad_id = 0):
         r""" Decoder is a stack of N decoder layers"""
         super(TransformerDecoder, self).__init__()
+
+        # position embedding
+        self.pos_embedding = nn.Embedding(
+            max_len, 
+            emb_dim,
+            pad_id
+        )
 
         self.emb_dim = emb_dim
         self.decoder_layer = nn.TransformerDecoderLayer(
@@ -147,9 +153,18 @@ class TransformerDecoder(nn.Module):
             norm = nn.LayerNorm(emb_dim)
         )
 
+        # initialize weights
+        self._reset_parameters()
+
     def forward(self, tgt_embedding, encoder_output, tgtmask, srcmask):
         r""" Pass the inputs (and masks) through each decoder layer in turn"""
         
+        # create position vector, embed, add to input vector
+        position_ids = torch.arange(tgt_embedding.size(-1), dtype=torch.long, device=tgt_embedding.device)
+        position_ids = position_ids.unsqueeze(0).expand_as(tgt_embedding)
+        position_embeds = self.pos_embedding(position_ids)
+        hidden_state = tgt_embedding + position_embeds
+
         # generate square padding masks so that only positions before i can influence attention op
         tgt_position_mask = self.generate_square_subsequent_mask(tgt_embedding.size(1)) 
 
@@ -157,7 +172,7 @@ class TransformerDecoder(nn.Module):
             tgt_position_mask = tgt_position_mask.cuda()
 
         return self.transformer_decoder.forward(
-            tgt_embedding.transpose(0,1), 
+            hidden_state.transpose(0,1), 
             encoder_output.transpose(0,1), 
             tgt_key_padding_mask = tgtmask, 
             memory_key_padding_mask = srcmask,
@@ -171,4 +186,11 @@ class TransformerDecoder(nn.Module):
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
+
+    def _reset_parameters(self):
+        r"""Initiate parameters in the transformer model."""
+
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
 

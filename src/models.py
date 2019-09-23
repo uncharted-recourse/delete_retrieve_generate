@@ -60,13 +60,12 @@ def initialize_inference_model(config, input_lines = None, map_location = 'cpu')
         cache_dir=os.path.join("checkpoints", config['data']['vocab_dir']))
 
     # init model
-    padding_id = data.get_padding_id(tokenizer)
     vocab_size = len(tokenizer)
     model = FusedSeqModel(
         src_vocab_size=vocab_size,
         tgt_vocab_size=vocab_size,
-        pad_id_src=padding_id,
-        pad_id_tgt=padding_id,
+        pad_id_src=tokenizer.pad_token_id,
+        pad_id_tgt=tokenizer.pad_token_id,
         config=config
     )
     for param in model.parameters():
@@ -140,7 +139,9 @@ class SeqModel(nn.Module):
                 self.options['emb_dim'],
                 dim_ff=self.options['src_hidden_dim'],
                 dropout=self.options['dropout'],
-                num_layers=self.options['src_layers']
+                num_layers=self.options['src_layers'],
+                max_len=self.config['data']['max_len'],
+                pad_id=pad_id_src
             )
             ctx_bridge_in = self.options['emb_dim']
         else:
@@ -149,7 +150,6 @@ class SeqModel(nn.Module):
         # # # # # #  # # # # # #  # # # # #  NEW STUFF FROM STD SEQ2SEQ
         if self.model_type == 'delete':
             self.attribute_embedding = nn.Embedding(
-                # TODO change num to num styles supported
                 num_embeddings=len(config['data']['test']), 
                 embedding_dim=self.options['emb_dim'])
             if self.options['encoder'] == 'lstm':
@@ -173,7 +173,9 @@ class SeqModel(nn.Module):
                     self.options['emb_dim'],
                     dim_ff=self.options['src_hidden_dim'],
                     dropout=self.options['dropout'],
-                    num_layers=self.options['src_layers']
+                    num_layers=self.options['src_layers'],
+                    max_len=self.config['data']['max_len'],
+                    pad_id=pad_id_src
                 )
                 attr_size = self.options['emb_dim']
 
@@ -192,7 +194,9 @@ class SeqModel(nn.Module):
                 self.options['emb_dim'],
                 dim_ff=self.options['src_hidden_dim'],
                 dropout=self.options['dropout'],
-                num_layers=self.options['tgt_layers']
+                num_layers=self.options['tgt_layers'],
+                max_len=self.config['data']['max_len'],
+                pad_id=pad_id_tgt
             )
             bridge_out = self.options['emb_dim']
         else:
@@ -333,7 +337,8 @@ class FusedSeqModel(SeqModel):
     def __init__(
         self,
         *args,
-        join_method = 'add',
+        fusion_method = 'shallow',
+        init_weights = 'zero',
         finetune = False,
         **kwargs,
     ):
@@ -351,13 +356,19 @@ class FusedSeqModel(SeqModel):
 
         # join language model and s2s model
         self.join_method = join_method
-        if self.join_method == "add":
-            self.multp = nn.Parameter(torch.zeros(1))
-            #self.multp = nn.Parameter(torch.rand(1))
-        elif self.join_method == "gate":
+        if self.join_method == "shallow":
+            if init_weights == 'zero':
+                self.multp = nn.Parameter(torch.zeros(1))
+            elif init_weights = 'ones':
+                self.multp = nn.Parameter(torch.ones(1))
+            elif init_weights = 'rand':
+                self.multp = nn.Parameter(torch.rand(1))
+            else:
+                raise NotImplementedError('init weights must be one of "zero", "ones", or "rand"')
+        elif self.join_method == "cold":
             self.lm_sigmoid = nn.Sigmoid()
-        elif self.join_method != 'post-norm':
-            raise Exception("join method must be 'gate', 'add', or 'post-norm'")
+         else:
+            raise NotImplementedError('join method must be "shallow", "deep" or "cold"')
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
 
@@ -376,14 +387,11 @@ class FusedSeqModel(SeqModel):
         )
 
         # add or multiply projected logits
-        if self.join_method == "add":
+        if self.join_method == "shallow":
             combined = s2s_logit.add(lm_logit * self.multp.expand_as(lm_logit))
             probs = self.softmax(combined)
-        elif self.join_method == 'gate':
+        elif self.join_method == 'cold':
             combined = s2s_logit * self.lm_sigmoid(lm_logit)
-            probs = self.softmax(combined)
-        elif self.join_method == 'post-norm':
-            combined = self.softmax(s2s_logit) * self.softmax(lm_logit)
             probs = self.softmax(combined)
 
         return combined, probs, decoder_states # in post-norm combined is no longer logits

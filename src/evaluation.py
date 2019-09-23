@@ -147,7 +147,7 @@ def calculate_discriminator_loss(dataset, style_ids, n_styles, content_data, att
     input_ids_aux, _, auxlens, auxmask, _ = attr_data
     generated_decoder_states = generate_soft_sequence(
         max_length,
-        data.get_start_id(tokenizer), 
+        tokenizer.bos_token_id, 
         model, 
         content_data, # this could also be new_content (they are the same)
         new_attr,
@@ -164,12 +164,10 @@ def calculate_discriminator_loss(dataset, style_ids, n_styles, content_data, att
 
     # pass decoder states to discriminator module
     s_outputs = []
-    for i in range(len(s_discriminators)):
+    for i, style in enumerate(style_ids):
         decoder_states_sample = decoder_states_shuffled[i * sample_size:(i+1) * sample_size]
         gen_decoder_states_sample = generated_decoder_states[i * sample_size:(i+1) * sample_size]
-        print(f'decoder_states_sample: {decoder_states_sample.shape}')
-        print(f'gen_decoder_states_sample: {gen_decoder_states_sample.shape}')
-        s_outputs.append(s_discriminators[i].forward(torch.cat((decoder_states_sample, gen_decoder_states_sample), dim=0)))
+        s_outputs.append(s_discriminators[style].forward(torch.cat((decoder_states_sample, gen_decoder_states_sample), dim=0)))
     t2 = time.time()
     log(f'forward pass through discriminators took: {t2 - t1} seconds', level='debug')
 
@@ -205,8 +203,7 @@ def calculate_loss(dataset, style_ids, n_styles, config, batch_idx, sample_size,
     weight_mask = torch.ones(len(tokenizer))
     if CUDA:
         weight_mask = weight_mask.cuda()
-    padding_id = data.get_padding_id(tokenizer)
-    weight_mask[padding_id] = 0
+    weight_mask[tokenizer.pad_token_id] = 0
     
     # define loss criterion
     if loss_crit == 'cross_entropy':
@@ -313,16 +310,18 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
         # select the predicted "next" tokens, attach to target-side inputs
         next_preds = Variable(torch.from_numpy(decoder_argmax))
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
-        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] 
-            for cur, prev in zip(decoder_argmax, prev_mask)]
-        next_mask = Variable(torch.from_numpy(np.array(next_mask)))
-        if CUDA:
-            next_preds = next_preds.cuda()
-            next_mask = next_mask.cuda()
-        tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
-        tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
+        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] for cur, prev in zip(decoder_argmax, prev_mask)]
 
-    return tgt_input
+        # if all masks True, all sequences have generated to stop. can return 
+        if all([val for mask in next_mask for val in mask]):
+            return tgt_input
+        else: 
+            next_mask = Variable(torch.from_numpy(np.array(next_mask)))
+            if CUDA:
+                next_preds = next_preds.cuda()
+                next_mask = next_mask.cuda()
+            tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
+            tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
 
 def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     """ convert seqs to tokens"""
@@ -331,10 +330,8 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     tok_seqs = tok_seqs.cpu().numpy()
 
     # convert to toks, delete any special tokens (bos, eos, pad)
-    start_id = data.get_start_id(tokenizer)
-    stop_id = data.get_stop_id(tokenizer)
-    tok_seqs = [line[1:] if line[0] == start_id else line for line in tok_seqs]
-    tok_seqs = [np.split(line, np.where(line == stop_id)[0])[0] for line in tok_seqs]
+    tok_seqs = [line[1:] if line[0] == tokenizer.bos_token_id else line for line in tok_seqs]
+    tok_seqs = [np.split(line, np.where(line == tokenizer.eos_token_id)[0])[0] for line in tok_seqs]
     tok_seqs = [tokenizer.decode(line) for line in tok_seqs]
 
     # unsort
@@ -403,7 +400,7 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
     preds = [[] for i in range(len(style_ids))]
     auxs = [[] for i in range(len(style_ids))]
     ground_truths = [[] for i in range(len(style_ids))]
-    
+
     for j in range(0, upper_lim, sample_size):
         sys.stdout.write("\r%s/%s..." % (j * len(style_ids), upper_lim * len(style_ids)))
         sys.stdout.flush()
@@ -421,8 +418,8 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
             tokenizer,
             model, 
             config,
-            data.get_start_id(tokenizer),
-            data.get_stop_id(tokenizer),
+            tokenizer.bos_token_id,
+            tokenizer.eos_token_id,
             src_packed,
             auxs_packed,
         )
@@ -492,8 +489,6 @@ def predict_text(input_content, tokenizer, style_ids, config, model, train_data 
 
     # remove attribute tokens from input according if they have been marked
     # (if word / ngram attributes pre-calculated they will be cached and copied to image)
-    start = data.get_start_id(tokenizer)
-    stop = data.get_stop_id(tokenizer)
     input_content = input_content.split()
     if config['data']['noise'] == 'word_attributes' or config['data']['noise'] == 'ngram_attributes':
         attr_path = os.path.join("checkpoints", config['data']['vocab_dir'], 'style_vocabs.pkl')
@@ -519,7 +514,7 @@ def predict_text(input_content, tokenizer, style_ids, config, model, train_data 
 
         # tokenize attributes
         input_attr = torch.LongTensor([
-            [start] + 
+            [tokenizer.bos_token_id] + 
             tokenizer.encode(" ".join(attr))[:config['data']['max_len'] - 2]
             for attr in input_attributes])
         attr_length = [max([attr.shape[1] for attr in input_attr])]
@@ -532,7 +527,7 @@ def predict_text(input_content, tokenizer, style_ids, config, model, train_data 
 
     # tokenize content 
     input_content = torch.LongTensor([
-        [start] + 
+        [tokenizer.bos_token_id] + 
         tokenizer.encode(" ".join(input_content))[:config['data']['max_len'] - 2]])
     content_length = [input_content.shape[1]]
     content_mask = torch.BoolTensor([([False] * content_length[0])])
@@ -540,7 +535,7 @@ def predict_text(input_content, tokenizer, style_ids, config, model, train_data 
     # decode according to decoding strategy
     content = (input_content, None, content_length, content_mask, None)
     attributes = (input_attributes, None, attr_length, attr_mask, None)
-    output = generate_sequences(tokenizer, model, config, start, stop, content, attributes)
+    output = generate_sequences(tokenizer, model, config, tokenizer.bos_token_id, tokenizer.eos_token_id, content, attributes)
 
     # convert tokens to text
     preds = ' '.join(ids_to_toks(output, tokenizer, sort=False))
@@ -621,16 +616,18 @@ def decode_top_k(
             sampled_indices = np.array([x[idx] for x,idx in zip(top_ids, inds)])
         next_preds = Variable(torch.from_numpy(sampled_indices))
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
-        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] 
-            for cur, prev in zip(sampled_indices, prev_mask)]
-        next_mask = Variable(torch.from_numpy(np.array(next_mask)))
-        if CUDA:
-            next_preds = next_preds.cuda()
-            next_mask = next_mask.cuda()
-        tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
-        tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
+        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] for cur, prev in zip(sampled_indices, prev_mask)]
 
-    return tgt_input
+        # if all masks True, all sequences have generated to stop. can return 
+        if all([val for mask in next_mask for val in mask]):
+            return tgt_input
+        else: 
+            next_mask = Variable(torch.from_numpy(np.array(next_mask)))
+            if CUDA:
+                next_preds = next_preds.cuda()
+                next_mask = next_mask.cuda()
+            tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
+            tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
 
 class Beam(object):
     """ Beam object for beam search decoding"""

@@ -99,7 +99,6 @@ logging.info('...done!')
 batch_size = config['data']['batch_size']
 max_length = config['data']['max_len']
 src_vocab_size = tgt_vocab_size = len(train_data[0]['tokenizer'])
-padding_id = data.get_padding_id(train_data[0]['tokenizer'])
 torch.manual_seed(config['training']['random_seed'])
 np.random.seed(config['training']['random_seed'])
 writer = SummaryWriter(working_dir)
@@ -108,8 +107,8 @@ writer = SummaryWriter(working_dir)
 model = models.FusedSeqModel(
    src_vocab_size=src_vocab_size,
    tgt_vocab_size=tgt_vocab_size,
-   pad_id_src=padding_id,
-   pad_id_tgt=padding_id,
+   pad_id_src=train[0]['tokenizer'].pad_token_id,
+   pad_id_tgt=train[0]['tokenizer'].pad_token_id,
    config=config,
 )
 trainable, untrainable = model.count_params()

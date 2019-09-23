@@ -229,25 +229,6 @@ def calculate_ngram_attribute_vocab(input_lines, salience_threshold, ngram_range
     sc = SalienceCalculator(prepped_corpii, tokenize)
     return calculate_attribute_markers(prepped_corpii)
 
-""" could move all of these getters and get_tokenizer f() into an object"""
-def get_padding_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
-
-def get_start_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.bos_token)
-
-def get_stop_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.eos_token)
-
-def get_empty_id(tokenizer):
-    return tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens[0])
-
-def get_start_token(tokenizer):
-    return tokenizer.decode(tokenizer.encode(tokenizer.bos_token))
-
-def get_stop_token(tokenizer):
-    return tokenizer.decode(tokenizer.encode(tokenizer.eos_token))
-
 def get_tokenizer(encoder = 'gpt2',
     start_token = '<s>',
     stop_token = '</s>',
@@ -313,11 +294,10 @@ def read_nmt_data(input_lines, n_styles, config, train_data=None, cache_dir = No
         if os.path.isfile(attr_path):
             attrs = pickle.load(open(attr_path, "rb"))
         else:
-            corpii = [[w for line in lines for w in line] for lines in input_lines]
-            corpii_vocab = []
+            corpii = [np.array([w for line in lines for w in line]) for lines in input_lines]
+            corpii_vocab = np.array([])
             for corpus in corpii:
-                corpii_vocab += corpus
-            corpii_vocab = np.unique(np.array(corpii_vocab))
+                corpii_vocab = np.concatenate((corpii_vocab, np.unique(corpus)))
             sc = SalienceCalculator(corpii)
 
             # extract attributes 
@@ -425,26 +405,26 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
     # FORCE NO SORTING because we care about the order of outputs
     #   to compare across systems
 
-    lines = [line[:max_len] for lines in lines_even for line in lines[index:index + batch_size]]
+    lines = [line for lines in lines_even for line in lines[index:index + batch_size]]
     if dist_measurer is not None:
         lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
 
     lines = [
-        [get_start_id(tokenizer)] + 
+        [tokenizer.bos_token_id] + 
         tokenizer.encode(" ".join(line))[:max_len - 2] + 
-        [get_stop_id(tokenizer)] for line in lines]
+        [tokenizer.eos_token_id] for line in lines]
 
     lens = [len(line) - 1 for line in lines]
 
     input_lines = [
         line[:-1] +
-        [get_padding_id(tokenizer)] * (max_len - len(line) + 1)
+        [tokenizer.pad_token_id] * (max_len - len(line) + 1)
         for line in lines
     ]
 
     output_lines = [
         line[1:] +
-        [get_padding_id(tokenizer)] * (max_len - len(line) + 1)
+        [tokenizer.pad_token_id] * (max_len - len(line) + 1)
         for line in lines
     ]
 
@@ -490,8 +470,8 @@ def back_translation_minibatch(datasets, style_ids, n_styles, config, batch_idx,
         tokenizer,
         model, 
         config,
-        get_start_id(tokenizer),
-        get_stop_id(tokenizer),
+        tokenizer.bos_token_id,
+        tokenizer.eos_token_id,
         input_content,
         input_aux
     )

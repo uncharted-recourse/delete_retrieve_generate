@@ -59,9 +59,16 @@ class LSTMEncoder(nn.Module):
 
 class TransformerEncoder(nn.Module):
     """ simple wrapper for a pytorch transformer encoder """
-    def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4):
+    def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4, max_len = 50, pad_id = 0):
         r""" Encoder is a stack of N encoder layers"""
         super(TransformerEncoder, self).__init__()
+
+        # position embedding
+        self.pos_embedding = nn.Embedding(
+            max_len, 
+            emb_dim,
+            pad_id
+        )
 
         self.encoder_layer = nn.TransformerEncoderLayer(
             emb_dim, 
@@ -75,9 +82,26 @@ class TransformerEncoder(nn.Module):
             norm = nn.LayerNorm(emb_dim)
         )
 
+        # initialize weights
+        self._reset_parameters()
+
     def forward(self, src_embedding, srcmask):
         r""" Pass the inputs (and masks) through each encoder layer in turn"""
+        
+        # create position vector, embed, add to input vector
+        position_ids = torch.arange(src_embedding.size(-1), dtype=torch.long, device=src_embedding.device)
+        position_ids = position_ids.unsqueeze(0).expand_as(src_embedding)
+        position_embeds = self.pos_embedding(position_ids)
+        hidden_state = src_embedding + position_embeds
+
         return self.transformer_encoder.forward(
-            src_embedding.transpose(0,1), 
+            hidden_state.transpose(0,1), 
             src_key_padding_mask = srcmask
         ).transpose(0,1)
+
+    def _reset_parameters(self):
+        r"""Initiate parameters in the transformer model."""
+
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
