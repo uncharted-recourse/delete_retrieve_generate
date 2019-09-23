@@ -120,7 +120,7 @@ def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, o
     # (transformer) from teacher-forced example, for each style separately
     s_discriminators = [ConvNet(
         num_classes = 2, 
-        num_channels = [2,4], 
+        num_channels = [100,200], 
         kernel_sizes = [32,64], 
         conv_dim = 1, 
         pooling_stride = 4,

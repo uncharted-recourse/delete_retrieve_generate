@@ -167,6 +167,8 @@ def calculate_discriminator_loss(dataset, style_ids, n_styles, content_data, att
     for i in range(len(s_discriminators)):
         decoder_states_sample = decoder_states_shuffled[i * sample_size:(i+1) * sample_size]
         gen_decoder_states_sample = generated_decoder_states[i * sample_size:(i+1) * sample_size]
+        print(f'decoder_states_sample: {decoder_states_sample.shape}')
+        print(f'gen_decoder_states_sample: {gen_decoder_states_sample.shape}')
         s_outputs.append(s_discriminators[i].forward(torch.cat((decoder_states_sample, gen_decoder_states_sample), dim=0)))
     t2 = time.time()
     log(f'forward pass through discriminators took: {t2 - t1} seconds', level='debug')
@@ -391,15 +393,14 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
     """Evaluate model on num_samples of size sample_size"""
 
     # create list of lists to separate translations for each style
-    inputs = [[]]
-    preds = [[]]
-    auxs = [[]]
-    ground_truths = [[]]
-
     content_lengths = [len(datum['content']) for datum in test_data]
     style_ids = [i for i in range(len(content_lengths))]
     min_content_length = min(content_lengths)
     upper_lim = min(min_content_length, num_samples * sample_size)
+    inputs = [[] for i in range(len(style_ids))]
+    preds = [[] for i in range(len(style_ids))]
+    auxs = [[] for i in range(len(style_ids))]
+    ground_truths = [[] for i in range(len(style_ids))]
     for j in range(0, upper_lim, sample_size):
         sys.stdout.write("\r%s/%s..." % (j * len(style_ids), upper_lim * len(style_ids)))
         sys.stdout.flush()
@@ -422,20 +423,18 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
             src_packed,
             auxs_packed,
         )
-
         # convert inputs/preds/targets/aux to human-readable form
         for i in range(len(test_data)):
-            inputs[i].append(ids_to_toks(output_lines_src[i:(i+1)*sample_size], tokenizer, sort = False))
-            preds[i].append(ids_to_toks(tgt_pred[i:(i+1)*sample_size], tokenizer, sort = False))
-            ground_truths[i].append(ids_to_toks(output_lines_tgt[i:(i+1)*sample_size], tokenizer, sort = False))
+            inputs[i] += ids_to_toks(output_lines_src[i:(i+1)*sample_size], tokenizer, sort = False)
+            preds[i] += ids_to_toks(tgt_pred[i:(i+1)*sample_size], tokenizer, sort = False)
+            ground_truths[i] += ids_to_toks(output_lines_tgt[i:(i+1)*sample_size], tokenizer, sort = False)
     
             if config['model']['model_type'] == 'delete':
-                auxs[i].append([[str(x)] for x in input_ids_aux[i:(i+1)*sample_size].data.cpu().numpy()]) # because of list comp in inference_metrics()
+                auxs[i] += [[str(x[0])] for x in input_ids_aux[i:(i+1)*sample_size].data.cpu().numpy()] # because of list comp in inference_metrics()
             elif config['model']['model_type'] == 'delete_retrieve':
-                auxs[i].append(ids_to_toks(input_ids_aux[i:(i+1)*sample_size], tokenizer, sort = False))
+                auxs[i] += ids_to_toks(input_ids_aux[i:(i+1)*sample_size], tokenizer, sort = False)
             elif config['model']['model_type'] == 'seq2seq':
-                auxs[i].append(['None' for _ in range(sample_size)])
-
+                auxs[i] += ['None' for _ in range(sample_size)]
     return inputs, preds, ground_truths, auxs
 
 

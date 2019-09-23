@@ -425,7 +425,7 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
     # FORCE NO SORTING because we care about the order of outputs
     #   to compare across systems
 
-    lines = [line for lines in lines_even for line in lines[index:index + batch_size]]
+    lines = [line[:max_len] for lines in lines_even for line in lines[index:index + batch_size]]
     if dist_measurer is not None:
         lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
 
@@ -624,7 +624,7 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
         raise Exception('Unsupported model_type: %s' % model_type)
 
     # return ds order in back_translation regime, so these attrs can be extracted
-    if is_bt:
+    if is_bt or is_adv:
         return inputs, attributes, outputs, out_dataset_ordering
     else:
         return inputs, attributes, outputs

@@ -295,7 +295,6 @@ for epoch in range(start_epoch, config['training']['epochs']):
         # metrics averaged over metric for each style
         cur_metric = np.mean(cur_metrics)
         edit_distance = np.mean(edit_distances)
-
         with open(working_dir + '/auxs.%s' % epoch, 'w') as f:
             f.write('\n'.join(auxs) + '\n')
         with open(working_dir + '/inputs.%s' % epoch, 'w') as f:
@@ -308,7 +307,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         # write edit distance and bleu metrics separately for each style
         [writer.add_scalar(f'eval/edit_distance_target_style_{(i + 1) % n_styles}', e, epoch) for i, e in enumerate(edit_distances)]
         [writer.add_scalar(f'eval/bleu_target_style_{(i + 1) % n_styles}', c, epoch) for i, c in enumerate(cur_metrics)]
-
+        writer.add_scalar('eval/bleu', cur_metric, epoch)
     else:
         cur_metric = dev_loss
    
