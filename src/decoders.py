@@ -152,10 +152,8 @@ class TransformerDecoder(nn.Module):
         
         # generate square padding masks so that only positions before i can influence attention op
         tgt_position_mask = self.generate_square_subsequent_mask(tgt_embedding.size(1)) 
-        #src_position_mask = tgt_position_mask.expand(-1, encoder_output.size(1))
 
         if CUDA:
-            #src_position_mask = src_position_mask.cuda()
             tgt_position_mask = tgt_position_mask.cuda()
 
         return self.transformer_decoder.forward(
@@ -164,7 +162,6 @@ class TransformerDecoder(nn.Module):
             tgt_key_padding_mask = tgtmask, 
             memory_key_padding_mask = srcmask,
             tgt_mask = tgt_position_mask,
-            #memory_mask = src_position_mask
         ).transpose(0,1)
 
     def generate_square_subsequent_mask(self, sz):

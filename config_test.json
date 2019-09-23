@@ -5,7 +5,7 @@
     "learning_rate": 0.0003,
     "discriminator_learning_rate": 0.0003,
     "max_norm": 3.0,
-    "epochs": 11,
+    "epochs": 10,
     "batches_per_report": 200,
     "batches_per_sampling": 500,
     "random_seed": 1,
@@ -15,27 +15,27 @@
     "num_samples": 3 
   },
   "data": {
-    "train": ["data/gyafc_raw/sentiment.train.0.reduced", "data/gyafc_raw/sentiment.train.1.reduced", "data/imagecaption_raw/sentiment.train.0.reduced", "data/imagecaption_raw/sentiment.train.1.reduced"],
-    "test": ["data/gyafc_raw/sentiment.dev.0.head", "data/gyafc_raw/sentiment.dev.1.head", "data/imagecaption_raw/sentiment.dev.0.head", "data/imagecaption_raw/sentiment.dev.1.head"],
+    "train": ["data/gyafc_raw/sentiment.train.0", "data/gyafc_raw/sentiment.train.1", "data/imagecaption_raw/sentiment.train.0", "data/imagecaption_raw/sentiment.train.1"],
+    "test": ["data/gyafc_raw/sentiment.dev.0", "data/gyafc_raw/sentiment.dev.1", "data/imagecaption_raw/sentiment.dev.0", "data/imagecaption_raw/sentiment.dev.1"],
     "tokenizer": "gpt",
     "share_vocab": true,
     "noise": "dropout",
     "dropout_prob": 0.2,
     "ngram_range": 3,
     "salience_threshold": 5,
-    "batch_size": 32,
+    "batch_size": 128,
     "max_len": 50,
     "permutation": 3,
-    "working_dir": "testing",
+    "working_dir": "transformer_dropout",
     "vocab_dir": "noise_vocab",
     "lm_dir": "gpt_model"
   },
     "model": {
         "model_type": "delete",
         "emb_dim": 128,
-        "encoder": "lstm",
+        "encoder": "transformer",
         "bidirectional": true,
-        "decoder": "lstm",
+        "decoder": "transformer",
         "attention": true,
         "src_hidden_dim": 512,
         "src_layers": 1,
@@ -45,6 +45,6 @@
         "beam_width": 5,
         "k": 5,
         "temperature": 1.0,
-        "dropout": 0.2
+        "dropout": 0.3
     }
 }

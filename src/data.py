@@ -425,7 +425,7 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
     # FORCE NO SORTING because we care about the order of outputs
     #   to compare across systems
 
-    lines = [line for lines in lines_even for line in lines[index:index + batch_size]]
+    lines = [line[:max_len] for lines in lines_even for line in lines[index:index + batch_size]]
     if dist_measurer is not None:
         lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
 
