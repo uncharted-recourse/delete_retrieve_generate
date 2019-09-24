@@ -140,8 +140,7 @@ class SeqModel(nn.Module):
                 dim_ff=self.options['src_hidden_dim'],
                 dropout=self.options['dropout'],
                 num_layers=self.options['src_layers'],
-                max_len=self.config['data']['max_len'],
-                pad_id=pad_id_src
+                max_len=self.config['data']['max_len']
             )
             ctx_bridge_in = self.options['emb_dim']
         else:
@@ -175,7 +174,6 @@ class SeqModel(nn.Module):
                     dropout=self.options['dropout'],
                     num_layers=self.options['src_layers'],
                     max_len=self.config['data']['max_len'],
-                    pad_id=pad_id_src
                 )
                 attr_size = self.options['emb_dim']
 
@@ -196,7 +194,6 @@ class SeqModel(nn.Module):
                 dropout=self.options['dropout'],
                 num_layers=self.options['tgt_layers'],
                 max_len=self.config['data']['max_len'],
-                pad_id=pad_id_tgt
             )
             bridge_out = self.options['emb_dim']
         else:
@@ -337,7 +334,7 @@ class FusedSeqModel(SeqModel):
     def __init__(
         self,
         *args,
-        fusion_method = 'shallow',
+        join_method = 'shallow',
         init_weights = 'zero',
         finetune = False,
         **kwargs,
@@ -359,15 +356,22 @@ class FusedSeqModel(SeqModel):
         if self.join_method == "shallow":
             if init_weights == 'zero':
                 self.multp = nn.Parameter(torch.zeros(1))
-            elif init_weights = 'ones':
+            elif init_weights == 'ones':
                 self.multp = nn.Parameter(torch.ones(1))
-            elif init_weights = 'rand':
+            elif init_weights == 'rand':
                 self.multp = nn.Parameter(torch.rand(1))
             else:
                 raise NotImplementedError('init weights must be one of "zero", "ones", or "rand"')
-        elif self.join_method == "cold":
+
+        # deep fusion and cold fusion from https://arxiv.org/pdf/1708.06426.pdf
+        elif self.join_method == "deep" or self.join_method = 'cold':
             self.lm_sigmoid = nn.Sigmoid()
-         else:
+            self.lm_relu = nn.ReLU()
+            self.lm_linear_0 = nn.Linear(self.tgt_vocab_size, self.tgt_vocab_size)
+            self.lm_linear_1 = nn.Linear(self.tgt_vocab_size + self.tgt_vocab_size, self.tgt_vocab_size)
+            if self.join_method == 'cold':
+                self.lm_linear_2 = nn.Linear(self.tgt_vocab_size + self.tgt_vocab_size, self.tgt_vocab_size)
+        else:
             raise NotImplementedError('join method must be "shallow", "deep" or "cold"')
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
@@ -386,15 +390,28 @@ class FusedSeqModel(SeqModel):
             tgtmask
         )
 
-        # add or multiply projected logits
+        # combine lm logits and s2s logits according to fusion strategy
         if self.join_method == "shallow":
             combined = s2s_logit.add(lm_logit * self.multp.expand_as(lm_logit))
             probs = self.softmax(combined)
-        elif self.join_method == 'cold':
-            combined = s2s_logit * self.lm_sigmoid(lm_logit)
+        elif self.join_method == 'deep':
+            out = self.lm_linear_0(lm_logit)
+            concat = torch.cat((s2s_logit, self.lm_sigmoid(out)), 1)
+            out = self.lm_linear_1(concat)
+            combined = self.lm_relu(out)
+            probs = self.softmax(combined)
+        else:
+            out = self.lm_linear_0(lm_logit)
+            concat = torch.cat((s2s_logit, out), 1)
+            out = self.lm_linear_1(concat)
+            gated = self.lm_sigmoid(out)
+            hadamard = gated * lm_logit
+            concat = torch.cat((s2s_logit, hadamard), 1)
+            out = self.lm_linear_2(concat)
+            combined = self.lm_relu(out)
             probs = self.softmax(combined)
 
-        return combined, probs, decoder_states # in post-norm combined is no longer logits
+        return combined, probs, decoder_states
 
     def count_params(self):
         return super(FusedSeqModel, self).count_params()

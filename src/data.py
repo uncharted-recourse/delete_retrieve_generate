@@ -100,12 +100,12 @@ class SalienceCalculator(object):
     """ object that supports the calculation of the saliency of different n-grams across corpii"""
     def __init__(self, corpii, tokenize = None):
         if tokenize is None:
-            self.vectorizer = CountVectorizer()
+            vectorizers = [CountVectorizer() for _ in corpii]
         else:
-            self.vectorizer = CountVectorizer(tokenizer=tokenize)
+            vectorizers = [CountVectorizer(tokenizer=tokenize) for _ in corpii]
 
-        count_matrices = [self.vectorizer.fit_transform(corpus) for corpus in corpii]
-        self.vocab = self.vectorizer.vocabulary_
+        count_matrices = [v.fit_transform(corpus) for v, corpus in zip(vectorizers, corpii)]
+        self.vocabs = [v.vocabulary_ for v in vectorizers]
         self.counts = [np.sum(count_matrix, axis=0) for count_matrix in count_matrices]
         self.counts = [np.squeeze(np.asarray(count)) for count in self.counts]
 
@@ -115,9 +115,9 @@ class SalienceCalculator(object):
 
         feature_counts = [0.0 for _ in self.counts]
         corpus_indices = [i for i in range(len(self.counts))]
-        for idx, style_count in enumerate(self.counts):
-            if feature in self.vocab:
-                feature_counts[idx] = style_count[self.vocab[feature]]
+        for idx, (vocab, style_count) in enumerate(zip(self.vocabs, self.counts)):
+            if feature in vocab:
+                feature_counts[idx] = style_count[vocab[feature]]
 
         # sort feature counts and corpus indices in tandem
         sort = [(idx, count) for idx, count in sorted(zip(corpus_indices,feature_counts))]
@@ -206,17 +206,17 @@ def calculate_ngram_attribute_vocab(input_lines, salience_threshold, ngram_range
     # corpii is an iterable of corpus' to calculate attributes over
     def calculate_attribute_markers(corpii):
         attrs = [{} for _ in range(len(corpii))]
-        joined = []
+        unique_grams = np.array([])
         for corpus in corpii:
+            corpus_joined = []
             for sentence in tqdm(corpus):
                 for i in range(1, ngram_range):
                     i_grams = ngrams(sentence.split(), i)
-                    joined.extend([
+                    corpus_joined.extend([
                         " ".join(gram)
                         for gram in i_grams
                     ])
-        # find unique n_grams across all corpii
-        unique_grams = np.unique(np.array(joined))
+            unique_grams = np.concatenate((unique_grams, np.unique(np.array(corpus_joined))))
 
         # calculate saliences and return n-gram attribute lists
         for gram in unique_grams:

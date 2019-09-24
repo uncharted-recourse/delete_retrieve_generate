@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 from src.cuda import CUDA
+from src.encoders import PositionalEmbedding, PositionalEncoding
 
 class BilinearAttention(nn.Module):
     """ bilinear attention layer: score(H_j, q) = H_j^T W_a q
@@ -129,16 +130,17 @@ class StackedAttentionLSTM(nn.Module):
 
 class TransformerDecoder(nn.Module):
     r""" simple wrapper for a pytorch transformer encoder """
-    def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4, max_len = 50, pad_id = 0):
+    def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4, max_len = 50, positional_encoding = 'embedding'):
         r""" Decoder is a stack of N decoder layers"""
         super(TransformerDecoder, self).__init__()
 
-        # position embedding
-        self.pos_embedding = nn.Embedding(
-            max_len, 
-            emb_dim,
-            pad_id
-        )
+        # apply desired positional encoding
+        if positional_encoding == 'embedding':
+            self.pos_encoding = PositionalEncoding(emb_dim, dropout=dropout)
+        elif positional_encoding == 'sinusoid':
+            self.pos_encoding = PositionalEncoding(emb_dim, dropout = dropout)
+        else:
+            raise NotImplementedError('positional encoding method must be "embedding" or "sinusoid"')
 
         self.emb_dim = emb_dim
         self.decoder_layer = nn.TransformerDecoderLayer(
@@ -159,11 +161,8 @@ class TransformerDecoder(nn.Module):
     def forward(self, tgt_embedding, encoder_output, tgtmask, srcmask):
         r""" Pass the inputs (and masks) through each decoder layer in turn"""
         
-        # create position vector, embed, add to input vector
-        position_ids = torch.arange(tgt_embedding.size(-1), dtype=torch.long, device=tgt_embedding.device)
-        position_ids = position_ids.unsqueeze(0).expand_as(tgt_embedding)
-        position_embeds = self.pos_embedding(position_ids)
-        hidden_state = tgt_embedding + position_embeds
+        # run through positional encoding layer
+        hidden_state = self.pos_encoding(tgt_embedding)
 
         # generate square padding masks so that only positions before i can influence attention op
         tgt_position_mask = self.generate_square_subsequent_mask(tgt_embedding.size(1)) 

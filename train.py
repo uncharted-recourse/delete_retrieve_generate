@@ -107,8 +107,8 @@ writer = SummaryWriter(working_dir)
 model = models.FusedSeqModel(
    src_vocab_size=src_vocab_size,
    tgt_vocab_size=tgt_vocab_size,
-   pad_id_src=train[0]['tokenizer'].pad_token_id,
-   pad_id_tgt=train[0]['tokenizer'].pad_token_id,
+   pad_id_src=train_data[0]['tokenizer'].pad_token_id,
+   pad_id_tgt=train_data[0]['tokenizer'].pad_token_id,
    config=config,
 )
 trainable, untrainable = model.count_params()
