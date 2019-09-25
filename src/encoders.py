@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import torch
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-
+import math
 from src.cuda import CUDA
 
 class LSTMEncoder(nn.Module):
@@ -72,10 +72,10 @@ class PositionalEncoding(nn.Module):
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
+        #self.register_buffer('pe', pe)
         
     def forward(self, x):
-        x = x + Variable(self.pe[:, :x.size(1)], 
+        x = x + Variable(self.pe[:, :x.shape[1]], 
                          requires_grad=False)
         return self.dropout(x)
 
@@ -91,10 +91,14 @@ class PositionalEmbedding(nn.Module):
 
         # compute the absolute position encodings once
         self.positions = torch.arange(0, max_len, dtype=torch.long).unsqueeze(1)
-        self.register_buffer('positions', self.positions)
+        
+        if CUDA:
+            self.positions = self.positions.cuda()
+        
+        #self.register_buffer('positions', self.positions)
     
     def forward(self, x):
-        x = x + self.embedding(self.positions)
+        x = x + self.embedding(self.positions[:, :x.shape[1]]).squeeze(1)
         return self.dropout(x)
 
 def relative_attention_inner(x, y, z, transpose):
@@ -117,19 +121,97 @@ def relative_attention_inner(x, y, z, transpose):
 
     # xy_matmul is [batch_size, heads, length or 1, length or depth]
     if transpose:
-        y = transpose(2,3)
-    xy_matmul = torch.matmul(x, y, transpose_b=transpose)
-    # x_t is [length or 1, batch_size, heads, length or depth]
-    x_t = tf.transpose(x, [2, 0, 1, 3])
+        y = y.transpose(2,3)
+        z = z.transpose(1,2)
+    xy_matmul = torch.matmul(x, y)
     # x_t_r is [length or 1, batch_size * heads, length or depth]
-    x_t_r = tf.reshape(x_t, [length, heads * batch_size, -1])
+    # replace view with reshape if memory errors
+    x_t_r = x.view(length, heads * batch_size, -1)
     # x_tz_matmul is [length or 1, batch_size * heads, length or depth]
-    x_tz_matmul = tf.matmul(x_t_r, z, transpose_b=transpose)
-    # x_tz_matmul_r is [length or 1, batch_size, heads, length or depth]
-    x_tz_matmul_r = tf.reshape(x_tz_matmul, [length, batch_size, heads, -1])
+    x_tz_matmul = tf.matmul(x_t_r, z)
     # x_tz_matmul_r_t is [batch_size, heads, length or 1, length or depth]
-    x_tz_matmul_r_t = tf.transpose(x_tz_matmul_r, [1, 2, 0, 3])
+    x_tz_matmul_r_t = x_tz_matmul.view(batch_size, heads, length, -1)
     return xy_matmul + x_tz_matmul_r_t
+
+def _generate_relative_positions_matrix(length, max_relative_position):
+  """Generates matrix of relative positions between inputs.
+     Original tensorflow implementation: https://github.com/tensorflow/tensor2tensor"""
+
+    range_mat = torch.arange(length).repeat(length, 1)
+    distance_mat = range_mat - range_mat.transpose(0,1)
+    distance_mat_clipped = torch.clamp(distance_mat, -max_relative_position, max_relative_position)
+    # Shift values to be >= 0. Each integer still uniquely identifies a relative position difference.
+    final_mat = distance_mat_clipped + max_relative_position
+    return final_mat
+
+
+def _generate_relative_positions_embeddings(length, max_relative_position, embedding_layer):
+  """Generates tensor of size [1 if cache else length, length, depth].
+    Original tensorflow implementation: https://github.com/tensorflow/tensor2tensor"""
+
+    relative_positions_matrix = _generate_relative_positions_matrix(length, max_relative_position)
+    # Generates embedding for each relative position of dimension depth.
+    return embedding_layer(relative_positions_matrix)
+
+def dot_product_attention_relative(q,
+                                   k,
+                                   v,
+                                   bias,
+                                   k_embedding_layer, 
+                                   v_embedding_layer,
+                                   max_relative_position,
+                                   dropout_rate=0.0):
+
+  """Calculate relative position-aware dot-product self-attention.
+  Original tensorflow implementation: https://github.com/tensorflow/tensor2tensor
+
+  The attention calculation is augmented with learned representations for the
+  relative position between each element in q and each element in k and v.
+  Args:
+    q: a Tensor with shape [batch, heads, length, depth].
+    k: a Tensor with shape [batch, heads, length, depth].
+    v: a Tensor with shape [batch, heads, length, depth].
+    bias: bias Tensor.
+    max_relative_position: an integer specifying the maximum distance between
+        inputs that unique position embeddings should be learned for.
+    dropout_rate: a floating point number.
+
+  Returns:
+    A Tensor.
+  Raises:
+    ValueError: if max_relative_position is not > 0.
+  """
+    if not max_relative_position:
+        raise ValueError("Max relative position (%s) should be > 0 when using "
+                         "relative self attention." % (max_relative_position))
+
+    # This calculation only works for self attention.
+    # q, k and v must therefore have the same shape.
+    assert q.shape == k.shape, "This calculation only works for self attention. Q and K must have same shape"
+    assert q.shape == v.shape, "This calculation only works for self attention. Q and K must have same shape"
+
+    # Use separate embeddings suitable for keys and values.
+    depth = k.shape[3]
+    length = k.shape[2]
+    relations_keys = _generate_relative_positions_embeddings(
+        length, max_relative_position, k_embedding_layer)
+    relations_values = _generate_relative_positions_embeddings(
+        length, depth, max_relative_position, v_embedding_layer)
+
+    # Compute self attention considering the relative position embeddings.
+
+    ## Continue from here tomorrow - need separate impl. for masked relative pos. att. in decoder
+    logits = _relative_attention_inner(q, k, relations_keys, True)
+    if bias is not None:
+        logits += bias
+    weights = tf.nn.softmax(logits, name="attention_weights")
+    if save_weights_to is not None:
+        save_weights_to[scope.name] = weights
+        save_weights_to[scope.name + "/logits"] = logits
+    weights = tf.nn.dropout(weights, 1.0 - dropout_rate)
+    if not tf.get_variable_scope().reuse and make_image_summary:
+        attention_image_summary(weights, image_shapes)
+    return _relative_attention_inner(weights, v, relations_values, False)
 
 class TransformerEncoder(nn.Module):
     """ simple wrapper for a pytorch transformer encoder """
@@ -139,7 +221,7 @@ class TransformerEncoder(nn.Module):
 
         # apply desired positional encoding
         if positional_encoding == 'embedding':
-            self.pos_encoding = PositionalEncoding(emb_dim, dropout=dropout)
+            self.pos_encoding = PositionalEmbedding(emb_dim, dropout=dropout)
         elif positional_encoding == 'sinusoid':
             self.pos_encoding = PositionalEncoding(emb_dim, dropout = dropout)
         else:

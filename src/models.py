@@ -364,7 +364,7 @@ class FusedSeqModel(SeqModel):
                 raise NotImplementedError('init weights must be one of "zero", "ones", or "rand"')
 
         # deep fusion and cold fusion from https://arxiv.org/pdf/1708.06426.pdf
-        elif self.join_method == "deep" or self.join_method = 'cold':
+        elif self.join_method == "deep" or self.join_method == 'cold':
             self.lm_sigmoid = nn.Sigmoid()
             self.lm_relu = nn.ReLU()
             self.lm_linear_0 = nn.Linear(self.tgt_vocab_size, self.tgt_vocab_size)

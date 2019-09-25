@@ -14,7 +14,6 @@ from src import evaluation
 import logging
 from utils.log_func import get_log_func
 from pytorch_transformers import OpenAIGPTTokenizer, GPT2Tokenizer#, XLNetTokenizer, TransfoXLTokenizer
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from tqdm import tqdm
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
@@ -120,7 +119,7 @@ class SalienceCalculator(object):
                 feature_counts[idx] = style_count[vocab[feature]]
 
         # sort feature counts and corpus indices in tandem
-        sort = [(idx, count) for idx, count in sorted(zip(corpus_indices,feature_counts))]
+        sort = [(idx, count) for count, idx in sorted(zip(feature_counts, corpus_indices))]
         return sort[-1][0], (sort[-1][1] + lmbda) / (sort[-2][1] + lmbda)
 
 def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.1, ngram_range = 5, permutation = 0):

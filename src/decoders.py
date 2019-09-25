@@ -136,7 +136,7 @@ class TransformerDecoder(nn.Module):
 
         # apply desired positional encoding
         if positional_encoding == 'embedding':
-            self.pos_encoding = PositionalEncoding(emb_dim, dropout=dropout)
+            self.pos_encoding = PositionalEmbedding(emb_dim, dropout=dropout)
         elif positional_encoding == 'sinusoid':
             self.pos_encoding = PositionalEncoding(emb_dim, dropout = dropout)
         else:
