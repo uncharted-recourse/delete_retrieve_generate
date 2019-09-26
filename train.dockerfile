@@ -14,8 +14,8 @@ COPY requirements.txt $HOME/
 RUN pip install -r requirements.txt
 
 # install pytorch_transformers from source
-RUN git clone https://github.com/huggingface/pytorch-transformers
-RUN pip install pytorch-transformers/.
+#RUN git clone https://github.com/huggingface/pytorch-transformers
+#RUN pip install pytorch-transformers/.
 
 # copy data for local testing experiments
 COPY data/gyafc_raw/ $HOME/data/gyafc_raw/

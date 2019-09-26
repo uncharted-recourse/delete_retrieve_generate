@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from pytorch_transformers import OpenAIGPTModel, OpenAIGPTLMHeadModel, GPT2LMHeadModel#, XLNetLMHeadModel, TransfoXLLMHeadModel
+from transformers import OpenAIGPTModel, OpenAIGPTLMHeadModel, GPT2LMHeadModel, OpenAIGPTConfig
 import torch.optim as optim
 from src import models
 from src.cuda import CUDA
@@ -196,7 +196,8 @@ class LanguageModel(nn.Module):
     
         # !! assume that language model and seq2seq are using same tokenization !!
         self.lang_model = models[model_name].from_pretrained(model_weights[model_name], 
-            cache_dir=cache_dir
+            cache_dir=cache_dir,
+            config = OpenAIGPTConfig(output_hidden_states = True)
         )
 
         # resize token embeddings if vocabulary has been augmented with special tokens
@@ -208,7 +209,7 @@ class LanguageModel(nn.Module):
                 param.requires_grad = False
 
     def forward(self, input_tgt, attention_mask = None):
-        return self.lang_model(input_tgt, attention_mask = attention_mask)[0]
+        return self.lang_model(input_tgt, attention_mask = attention_mask)
 
 class OpenAIGPTModelAdversarial(OpenAIGPTModel):
     """ this class inherits from OpenAIGPTModel, but supports either discrete token ids as lookups to embedding layer 

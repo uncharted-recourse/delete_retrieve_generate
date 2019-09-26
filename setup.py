@@ -19,7 +19,9 @@ setup(
         "tensorboardX==1.7",
         "torch==1.2.0",
         "torchvision==0.3.0",
-        #"pytorch_transformers", need to install from source
+        "transformers==2.0.0",
+        "spacy",
+        "ftfy"
     ],
     include_package_data=True,
 )

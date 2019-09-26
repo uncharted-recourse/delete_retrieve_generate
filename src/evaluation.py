@@ -314,14 +314,9 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
         if CUDA:
             next_preds = next_preds.cuda()
             next_mask = next_mask.cuda()
-
-        # if all masks True, all sequences have generated to stop. can return 
-        if all([val for mask in next_mask for val in mask]):
-            return torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
-        else: 
-            next_mask = Variable(torch.from_numpy(np.array(next_mask)))
-            tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
-            tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
+        tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
+        tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
+    return tgt_input
 
 def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
     """ convert seqs to tokens"""
@@ -425,14 +420,14 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
         )
         # convert inputs/preds/targets/aux to human-readable form
         for i in range(len(test_data)):
-            inputs[i] += ids_to_toks(output_lines_src[i:(i+1)*sample_size], tokenizer, sort = False)
-            preds[i] += ids_to_toks(tgt_pred[i:(i+1)*sample_size], tokenizer, sort = False)
-            ground_truths[i] += ids_to_toks(output_lines_tgt[i:(i+1)*sample_size], tokenizer, sort = False)
+            inputs[i] += ids_to_toks(output_lines_src[i*sample_size:(i+1)*sample_size], tokenizer, sort = False)
+            preds[i] += ids_to_toks(tgt_pred[i*sample_size:(i+1)*sample_size], tokenizer, sort = False)
+            ground_truths[i] += ids_to_toks(output_lines_tgt[i*sample_size:(i+1)*sample_size], tokenizer, sort = False)
     
             if config['model']['model_type'] == 'delete':
-                auxs[i] += [[str(x[0])] for x in input_ids_aux[i:(i+1)*sample_size].data.cpu().numpy()] # because of list comp in inference_metrics()
+                auxs[i] += [[str(x[0])] for x in input_ids_aux[i*sample_size:(i+1)*sample_size].data.cpu().numpy()] # because of list comp in inference_metrics()
             elif config['model']['model_type'] == 'delete_retrieve':
-                auxs[i] += ids_to_toks(input_ids_aux[i:(i+1)*sample_size], tokenizer, sort = False)
+                auxs[i] += ids_to_toks(input_ids_aux[i*sample_size:(i+1)*sample_size], tokenizer, sort = False)
             elif config['model']['model_type'] == 'seq2seq':
                 auxs[i] += ['None' for _ in range(sample_size)]
     return inputs, preds, ground_truths, auxs
@@ -614,21 +609,17 @@ def decode_top_k(
             top_scores = [x[idx] for x, idx in zip(decoder_logits, top_ids)]
             inds = [sample_softmax(top, temperature=temperature) for top in top_scores]
             sampled_indices = np.array([x[idx] for x,idx in zip(top_ids, inds)])
-        next_preds = Variable(torch.from_numpy(sampled_indices))
+        next_preds = torch.LongTensor(sampled_indices)
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
-        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] for cur, prev in zip(sampled_indices, prev_mask)
+        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] for cur, prev in zip(sampled_indices, prev_mask)]
+        next_mask = torch.BoolTensor(next_mask)
         if CUDA:
             next_preds = next_preds.cuda()
             next_mask = next_mask.cuda()
-
-        # if all masks True, all sequences have generated to stop. can return 
-        if all([val for mask in next_mask for val in mask]):
-            return torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
-        else: 
-            next_mask = Variable(torch.from_numpy(np.array(next_mask)))
-            tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
-            tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
-
+        tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
+        tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
+    return tgt_input
+    
 class Beam(object):
     """ Beam object for beam search decoding"""
 

@@ -13,7 +13,7 @@ from src import evaluation
 
 import logging
 from utils.log_func import get_log_func
-from pytorch_transformers import OpenAIGPTTokenizer, GPT2Tokenizer#, XLNetTokenizer, TransfoXLTokenizer
+from transformers import OpenAIGPTTokenizer, GPT2Tokenizer#, XLNetTokenizer, TransfoXLTokenizer
 from tqdm import tqdm
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
@@ -204,6 +204,7 @@ def calculate_ngram_attribute_vocab(input_lines, salience_threshold, ngram_range
     
     # corpii is an iterable of corpus' to calculate attributes over
     def calculate_attribute_markers(corpii):
+        sc = SalienceCalculator(prepped_corpii, tokenize)
         attrs = [{} for _ in range(len(corpii))]
         unique_grams = np.array([])
         for corpus in corpii:
@@ -219,13 +220,12 @@ def calculate_ngram_attribute_vocab(input_lines, salience_threshold, ngram_range
 
         # calculate saliences and return n-gram attribute lists
         for gram in unique_grams:
-            salience_index, max_sal = sc.max_salience(gram, salience_threshold)
+            salience_index, max_sal = sc.max_salience(gram)
             if max_sal > salience_threshold:
                 attrs[salience_index][gram] = max_sal
         return attrs
 
     prepped_corpii = [[' '.join(line) for line in corpus] for corpus in input_lines]
-    sc = SalienceCalculator(prepped_corpii, tokenize)
     return calculate_attribute_markers(prepped_corpii)
 
 def get_tokenizer(encoder = 'gpt2',
@@ -345,11 +345,11 @@ def read_nmt_data(input_lines, n_styles, config, train_data=None, cache_dir = No
         else:
             dist_measurers = [[CorpusSearcher(
                 query_corpus=[' '.join(x) for x in test_content],
-                key_corpus=[' '.join(x) for x in train_content],
-                value_corpus=[' '.join(x) for x in train_attributes],
+                key_corpus=[' '.join(x) for x in train_dict['content']],
+                value_corpus=[' '.join(x) for x in train_dict['attribute']],
                 vectorizer=TfidfVectorizer(),
                 make_binary=False)
-                for (_, train_content, train_attributes) in train_data]
+                for train_dict in train_data]
                 for (_, test_content, _) in data]
     else:
         dist_measurers = [None for _ in range(n_styles)]
@@ -365,35 +365,33 @@ def read_nmt_data(input_lines, n_styles, config, train_data=None, cache_dir = No
 
     return datasets
 
-def sample_replace(lines, tokenizer, dist_measurer, sample_rate, corpus_idx):
+def sample_replace(lines, tokenizer, dist_measurers, sample_rate, corpus_idx, batch_size):
     """
     replace sample_rate * batch_size lines with nearby examples (according to dist_measurer)
     not exactly the same as the paper (words shared instead of jaccaurd during train) but same idea
     only relevant in Delete and Retrieve model where similar sentences substituted
     """
 
-    out = [None for _ in range(len(lines))]
-    #replace_count = 0
-    for i, line in enumerate(lines):
-        if random.random() < sample_rate:
-            # top match is the current line
-            sims = dist_measurer.most_similar(corpus_idx + i)[1:]
-            
-            try:
-                line = next( (
-                    tgt_attr.split() for tgt_attr, _, _ in sims
-                    if set(tgt_attr.split()) != set(line) # and tgt_attr != ''   # TODO -- exclude blanks?
-                ) )
-            # all the matches are blanks
-            except StopIteration:
-                line = []
+    out = []
+    for i, dist_measurer in enumerate(dist_measurers):
+        for j, line in enumerate(lines[i * batch_size:(i+1) * batch_size]):
+            if random.random() < sample_rate:
+                # top match is the current line
+                sims = dist_measurer.most_similar(corpus_idx + j)[1:]
+                
+                try:
+                    line = next( (
+                        tgt_attr.split() for tgt_attr, _, _ in sims
+                        if set(tgt_attr.split()) != set(line) # and tgt_attr != ''   # TODO -- exclude blanks?
+                    ) )
+                # all the matches are blanks
+                except StopIteration:
+                    line = []
 
-        # corner case: special tok for empty sequences 
-        if len(line) == 0:
-            #replace_count += 1
-            line.insert(1, tokenizer.additional_special_tokens[0])
-        out[i] = line
-    #print(f'REPLACE_COUNT: {replace_count}')
+            # corner case: special tok for empty sequences 
+            if len(line) == 0:
+                line.insert(1, tokenizer.additional_special_tokens[0])
+            out.append(line)
     return out
 
 
@@ -405,8 +403,10 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
     #   to compare across systems
 
     lines = [line for lines in lines_even for line in lines[index:index + batch_size]]
+    
+    # Todo decompose list of dist_measurers
     if dist_measurer is not None:
-        lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
+        lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index, batch_size)
 
     lines = [
         [tokenizer.bos_token_id] + 

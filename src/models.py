@@ -135,12 +135,13 @@ class SeqModel(nn.Module):
                 self.options['tgt_hidden_dim'])
         elif self.options['encoder'] == 'transformer':
             # for now take default values of n_head
-            self.encoder = encoders.TransformerEncoder(
+            self.encoder = encoders.TransformerXLEncoder(
                 self.options['emb_dim'],
+                self.options['src_layers'],
                 dim_ff=self.options['src_hidden_dim'],
                 dropout=self.options['dropout'],
-                num_layers=self.options['src_layers'],
-                max_len=self.config['data']['max_len']
+                attention_type=self.options['positional_encoding'],
+                clamp_len=self.config['data']['max_len']
             )
             ctx_bridge_in = self.options['emb_dim']
         else:
@@ -168,12 +169,13 @@ class SeqModel(nn.Module):
                 attr_size = self.options['src_hidden_dim']
             elif self.options['encoder'] == 'transformer':
                 # for now take default values of n_head
-                self.attribute_encoder = encoders.TransformerEncoder(
+                self.attribute_encoder = encoders.TransformerXLEncoder(
                     self.options['emb_dim'],
+                    self.options['src_layers'],
                     dim_ff=self.options['src_hidden_dim'],
                     dropout=self.options['dropout'],
-                    num_layers=self.options['src_layers'],
-                    max_len=self.config['data']['max_len'],
+                    attention_type=self.options['positional_encoding'],
+                    clamp_len=self.config['data']['max_len'],
                 )
                 attr_size = self.options['emb_dim']
 
@@ -188,12 +190,13 @@ class SeqModel(nn.Module):
             self.decoder = decoders.StackedAttentionLSTM(config=config)
             bridge_out = self.options['tgt_hidden_dim']
         elif self.options['decoder'] == 'transformer':
-            self.decoder = decoders.TransformerDecoder(
+            self.decoder = decoders.TransformerXLDecoder(
                 self.options['emb_dim'],
-                dim_ff=self.options['src_hidden_dim'],
+                self.options['tgt_layers'],
+                dim_ff=self.options['tgt_hidden_dim'],
                 dropout=self.options['dropout'],
-                num_layers=self.options['tgt_layers'],
-                max_len=self.config['data']['max_len'],
+                attention_type=self.options['positional_encoding'],
+                clamp_len=self.config['data']['max_len'],
             )
             bridge_out = self.options['emb_dim']
         else:
@@ -364,20 +367,29 @@ class FusedSeqModel(SeqModel):
                 raise NotImplementedError('init weights must be one of "zero", "ones", or "rand"')
 
         # deep fusion and cold fusion from https://arxiv.org/pdf/1708.06426.pdf
-        elif self.join_method == "deep" or self.join_method == 'cold':
+        # TODO: rewrite to operate on decoder hidden states and lm hidden states 
+        elif self.join_method == "deep":
+            lm_dim = self.language_model.lang_model.config.n_embd
+            s2s_dim = self.options['emb_dim'] if self.options['decoder'] == 'transformer' else self.options['tgt_hidden_dim']
             self.lm_sigmoid = nn.Sigmoid()
             self.lm_relu = nn.ReLU()
-            self.lm_linear_0 = nn.Linear(self.tgt_vocab_size, self.tgt_vocab_size)
-            self.lm_linear_1 = nn.Linear(self.tgt_vocab_size + self.tgt_vocab_size, self.tgt_vocab_size)
-            if self.join_method == 'cold':
-                self.lm_linear_2 = nn.Linear(self.tgt_vocab_size + self.tgt_vocab_size, self.tgt_vocab_size)
+            self.lm_linear_0 = nn.Linear(lm_dim, lm_dim)
+            self.lm_linear_1 = nn.Linear(lm_dim + s2s_dim, self.tgt_vocab_size)
+        elif self.join_method == 'cold':
+            lm_dim = self.language_model.lang_model.config.n_embd
+            s2s_dim = self.options['emb_dim'] if self.options['decoder'] == 'transformer' else self.options['tgt_hidden_dim']
+            self.lm_sigmoid = nn.Sigmoid()
+            self.lm_relu = nn.ReLU()
+            self.lm_linear_0 = nn.Linear(self.tgt_vocab_size, lm_dim)
+            self.lm_linear_1 = nn.Linear(lm_dim + s2s_dim, lm_dim)
+            self.lm_linear_2 = nn.Linear(lm_dim + s2s_dim, self.tgt_vocab_size)
         else:
             raise NotImplementedError('join method must be "shallow", "deep" or "cold"')
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
 
         # generate predictions from language model
-        lm_logit = self.language_model.forward(input_tgt, attention_mask = ~tgtmask)
+        lm_logit, lm_hidden_states, _ = self.language_model.forward(input_tgt, attention_mask = ~tgtmask)
 
         # generate s2s logits
         s2s_logit, _, decoder_states = super(FusedSeqModel, self).forward(input_src,
@@ -395,18 +407,18 @@ class FusedSeqModel(SeqModel):
             combined = s2s_logit.add(lm_logit * self.multp.expand_as(lm_logit))
             probs = self.softmax(combined)
         elif self.join_method == 'deep':
-            out = self.lm_linear_0(lm_logit)
-            concat = torch.cat((s2s_logit, self.lm_sigmoid(out)), 1)
+            out = self.lm_linear_0(lm_hidden_states[-1])
+            concat = torch.cat((decoder_states, self.lm_sigmoid(out)), 2)
             out = self.lm_linear_1(concat)
             combined = self.lm_relu(out)
             probs = self.softmax(combined)
         else:
             out = self.lm_linear_0(lm_logit)
-            concat = torch.cat((s2s_logit, out), 1)
-            out = self.lm_linear_1(concat)
-            gated = self.lm_sigmoid(out)
-            hadamard = gated * lm_logit
-            concat = torch.cat((s2s_logit, hadamard), 1)
+            concat = torch.cat((decoder_states, out), 2)
+            out2 = self.lm_linear_1(concat)
+            gated = self.lm_sigmoid(out2)
+            hadamard = gated * out
+            concat = torch.cat((decoder_states, hadamard), 2)
             out = self.lm_linear_2(concat)
             combined = self.lm_relu(out)
             probs = self.softmax(combined)
