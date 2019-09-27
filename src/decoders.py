@@ -218,6 +218,7 @@ class TransformerXLDecoder(nn.Module):
 
         super(TransformerXLDecoder, self).__init__()
         self.attention_type = attention_type
+        self.clamp_len = clamp_len
         self.pos_emb = PositionalEmbedding(d_model)
         self.drop = nn.Dropout(dropout)
         self.norm = nn.LayerNorm(d_model)
@@ -240,11 +241,14 @@ class TransformerXLDecoder(nn.Module):
         """
         tgt = tgt.transpose(0,1)
         memory = memory.transpose(0,1)
-        if self.attention_type == 'relative':
-            tgt_key_padding_mask = tgt_key_padding_mask.transpose(0,1)
         qlen = tgt.shape[0]
 
-        pos_seq = torch.arange(qlen-1, -1, -1.0, device=tgt.device, dtype=tgt.dtype)
+        if self.attention_type == 'absolute':
+            pos_seq = torch.arange(0, max_len, device=tgt.device, dtype=tgt.dtype)
+        elif self.attention_type == 'relative':
+            pos_seq = torch.arange(qlen-1, -1, -1.0, device=tgt.device, dtype=tgt.dtype)
+            tgt_key_padding_mask = tgt_key_padding_mask.transpose(0,1)
+
         if self.clamp_len > 0:
             pos_seq.clamp_(max=self.clamp_len)
         pos_emb = self.pos_emb(pos_seq)
@@ -256,6 +260,8 @@ class TransformerXLDecoder(nn.Module):
             output = self.drop(tgt)
             pos_emb = self.drop(pos_emb)
             attn_mask = torch.triu(torch.ones((qlen, qlen), dtype=torch.uint8), diagonal=1)[:,:,None]
+        if CUDA:
+            attn_mask = attn_mask.cuda()
 
         for i in range(self.num_layers):
             output = self.layers[i](output, memory, pos_emb, tgt_mask=attn_mask,
@@ -264,7 +270,7 @@ class TransformerXLDecoder(nn.Module):
 
         output = self.norm(output)
 
-        return output.tranpose(0,1)
+        return output.transpose(0,1)
 
     def generate_square_subsequent_mask(self, sz):
         r"""Generate a square mask for the sequence. The masked positions are filled with float('-inf').

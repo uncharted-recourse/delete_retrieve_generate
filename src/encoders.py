@@ -228,7 +228,7 @@ class TransformerXLEncoder(nn.Module):
         norm: the layer normalization component (optional).
     """
 
-    def __init__(self, d_model, num_layers, nhead = 8, dim_ff = 2048, dropout = 0.1, attention_type = 'absolute', clamp_len = 50):
+    def __init__(self, d_model, num_layers, nhead = 8, dim_ff = 2048, dropout = 0.1, attention_type = 'absolute', max_len = 50, clamp_len = 50):
         
         super(TransformerXLEncoder, self).__init__()
         self.attention_type = attention_type
@@ -239,6 +239,7 @@ class TransformerXLEncoder(nn.Module):
         layer = TransformerXLEncoderLayer(d_model, nhead, dim_feedforward=dim_ff, attention_type=attention_type)
         self.layers = nn.ModuleList([copy.deepcopy(layer) for i in range(num_layers)])
         self.num_layers = num_layers
+
 
         # initialize weights
         self._reset_parameters()
@@ -253,11 +254,14 @@ class TransformerXLEncoder(nn.Module):
 
         """
         src = src.transpose(0,1)
-        if self.attention_type == 'relative':
-            src_key_padding_mask = src_key_padding_mask.transpose(0,1)
         qlen = src.shape[0]
 
-        pos_seq = torch.arange(qlen-1, -1, -1.0, device=src.device, dtype=src.dtype)
+        if self.attention_type == 'absolute':
+            pos_seq = torch.arange(0, max_len, device=src.device, dtype=src.dtype)
+        elif self.attention_type == 'relative':
+            pos_seq = torch.arange(qlen-1, -1, -1.0, device=src.device, dtype=src.dtype)
+            src_key_padding_mask = src_key_padding_mask.transpose(0,1)
+        
         if self.clamp_len > 0:
             pos_seq.clamp_(max=self.clamp_len)
         pos_emb = self.pos_emb(pos_seq)

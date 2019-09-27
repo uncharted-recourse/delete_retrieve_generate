@@ -214,7 +214,8 @@ class SeqModel(nn.Module):
         self.init_weights()
 
     def init_weights(self):
-        """Initialize weights."""
+        """Initialize weights.""" 
+        # TODO: should these be replaced with xavier_uniform??
         initrange = 0.1
         self.src_embedding.weight.data.uniform_(-initrange, initrange)
         self.tgt_embedding.weight.data.uniform_(-initrange, initrange)
@@ -389,7 +390,7 @@ class FusedSeqModel(SeqModel):
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
 
         # generate predictions from language model
-        lm_logit, lm_hidden_states, _ = self.language_model.forward(input_tgt, attention_mask = ~tgtmask)
+        lm_logit, lm_hidden_states = self.language_model.forward(input_tgt, attention_mask = ~tgtmask)
 
         # generate s2s logits
         s2s_logit, _, decoder_states = super(FusedSeqModel, self).forward(input_src,
@@ -427,6 +428,14 @@ class FusedSeqModel(SeqModel):
 
     def count_params(self):
         return super(FusedSeqModel, self).count_params()
+
+    def init_weights(self):
+        """Initialize fusion weights.""" 
+        nn.init.xavier_uniform_(self.lm_linear_0)
+        nn.init.xavier_uniform_(self.lm_linear_1)
+        if self.join_method == 'cold':
+            nn.init.xavier_uniform_(self.lm_linear_2)
+
 
 
         
