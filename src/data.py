@@ -332,12 +332,13 @@ def read_nmt_data(input_lines, n_styles, config, train_data=None, cache_dir = No
     # only need to define these distance measurers if using the delete and retrieve model
     if config['model']['model_type'] == 'delete_retrieve':
         if train_data is None:
-            dist_measurers = [CorpusSearcher(
+            dist_measurers = [[CorpusSearcher(
                 query_corpus=[' '.join(x) for x in attributes],
                 key_corpus=[' '.join(x) for x in attributes],
                 value_corpus=[' '.join(x) for x in attributes],
                 vectorizer=CountVectorizer(),
                 make_binary=True)
+                for _ in range(n_styles)]
                 for (_, _, attributes) in data]
 
         # at test time, scan through train content (using tfidf) and retrieve corresponding attributes
@@ -365,7 +366,7 @@ def read_nmt_data(input_lines, n_styles, config, train_data=None, cache_dir = No
 
     return datasets
 
-def sample_replace(lines, tokenizer, dist_measurers, sample_rate, corpus_idx, batch_size):
+def sample_replace(lines, tokenizer, dist_measurers, sample_rate, corpus_idx):
     """
     replace sample_rate * batch_size lines with nearby examples (according to dist_measurer)
     not exactly the same as the paper (words shared instead of jaccaurd during train) but same idea
@@ -373,6 +374,7 @@ def sample_replace(lines, tokenizer, dist_measurers, sample_rate, corpus_idx, ba
     """
 
     out = []
+    batch_size = len(lines) // len(dist_measurers)
     for i, dist_measurer in enumerate(dist_measurers):
         for j, line in enumerate(lines[i * batch_size:(i+1) * batch_size]):
             if random.random() < sample_rate:
@@ -406,7 +408,7 @@ def get_minibatch(lines_even, tokenizer, index, batch_size, max_len, sort=False,
     
     # Todo decompose list of dist_measurers
     if dist_measurer is not None:
-        lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index, batch_size)
+        lines = sample_replace(lines, tokenizer, dist_measurer, sample_rate, index)
 
     lines = [
         [tokenizer.bos_token_id] + 
@@ -552,7 +554,7 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
     in_data = [dataset['data'] for dataset in in_datasets]
     out_data = [out_datasets[i]['data'] for i in out_dataset_ordering]
     out_attributes = [out_datasets[i]['attribute'] for i in out_dataset_ordering]
-    out_dist_measurers = [out_datasets[i]['dist_measurer'] for i in out_dataset_ordering]
+    out_dist_measurers = [dataset['dist_measurer'][i] for dataset, i in zip(in_datasets, out_dataset_ordering)]
     tokenizer = datasets[0]['tokenizer']
     if model_type == 'delete':
         inputs = get_minibatch(
@@ -590,6 +592,7 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
                 out_attributes, tokenizer, idx, 
                 batch_size, max_len, idx=inputs[-1],
                 dist_measurer=out_dist_measurers, sample_rate=0.1)
+        attributes = (attributes[0].unsqueeze(-1), attributes[1], attributes[2], attributes[3], attributes[4])
 
     elif model_type == 'seq2seq':
         # ignore the in/out dataset stuff

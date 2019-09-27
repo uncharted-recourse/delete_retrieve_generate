@@ -140,7 +140,6 @@ class SeqModel(nn.Module):
                 self.options['src_layers'],
                 dim_ff=self.options['src_hidden_dim'],
                 dropout=self.options['dropout'],
-                attention_type=self.options['positional_encoding'],
                 clamp_len=self.config['data']['max_len']
             )
             ctx_bridge_in = self.options['emb_dim']
@@ -174,7 +173,6 @@ class SeqModel(nn.Module):
                     self.options['src_layers'],
                     dim_ff=self.options['src_hidden_dim'],
                     dropout=self.options['dropout'],
-                    attention_type=self.options['positional_encoding'],
                     clamp_len=self.config['data']['max_len'],
                 )
                 attr_size = self.options['emb_dim']
@@ -195,14 +193,16 @@ class SeqModel(nn.Module):
                 self.options['tgt_layers'],
                 dim_ff=self.options['tgt_hidden_dim'],
                 dropout=self.options['dropout'],
-                attention_type=self.options['positional_encoding'],
                 clamp_len=self.config['data']['max_len'],
             )
             bridge_out = self.options['emb_dim']
         else:
             raise NotImplementedError('unknown decoder type')
-
-        self.ctx_bridge = nn.Linear(ctx_bridge_in, bridge_out)
+        
+        if self.options['encoder'] == 'lstm':
+            self.ctx_bridge = nn.Linear(ctx_bridge_in, bridge_out)
+        elif self.options['encoder'] == 'transformer':
+            self.ctx_bridge = nn.Linear(ctx_bridge_in + attr_size, bridge_out)
         self.c_bridge = nn.Linear(attr_size + ctx_bridge_in, bridge_out)
         self.h_bridge = nn.Linear(attr_size + ctx_bridge_in, bridge_out)
 
@@ -247,10 +247,9 @@ class SeqModel(nn.Module):
 
         # attribute embedding can be average of different styles (indicator variables or
         # words) only utilized at inference time, not during training 
-
         if self.model_type == 'delete':
             a_hts = self.attribute_embedding(input_attr)
-            a_ht = torch.mean(a_hts, dim=1) if a_hts.shape[1] > 1 else a_hts.squeeze(1)
+            a_ht = torch.mean(a_hts, dim=-2) if a_hts.shape[1] > 1 else a_hts.squeeze(1)
             if self.options['encoder'] == 'lstm':
                 c_t = torch.cat((c_t_encoder, a_ht), -1)
                 c_t = self.c_bridge(c_t)
@@ -265,9 +264,8 @@ class SeqModel(nn.Module):
                     a_mask = a_mask.cuda()
                 srcmask = torch.cat((a_mask, srcmask), dim = 1)
         elif self.model_type == 'delete_retrieve':
-            attr_embs = [self.src_embedding(i_attr) for i_attr in input_attr]
-            attr_emb = torch.mean(torch.stack(attr_embs, dim=1), dim=1)
-
+            attr_embs = self.src_embedding(input_attr)
+            attr_emb = torch.mean(attr_embs, dim=-2) if attr_embs.shape[1] > 1 else attr_embs.squeeze(1)
             if self.options['encoder'] == 'lstm':
                 _, (a_ht, a_ct) = self.attribute_encoder(attr_emb, attrlens)
                 if self.options['bidirectional']:
@@ -376,6 +374,7 @@ class FusedSeqModel(SeqModel):
             self.lm_relu = nn.ReLU()
             self.lm_linear_0 = nn.Linear(lm_dim, lm_dim)
             self.lm_linear_1 = nn.Linear(lm_dim + s2s_dim, self.tgt_vocab_size)
+            self.init_fusion_weights()
         elif self.join_method == 'cold':
             lm_dim = self.language_model.lang_model.config.n_embd
             s2s_dim = self.options['emb_dim'] if self.options['decoder'] == 'transformer' else self.options['tgt_hidden_dim']
@@ -384,6 +383,7 @@ class FusedSeqModel(SeqModel):
             self.lm_linear_0 = nn.Linear(self.tgt_vocab_size, lm_dim)
             self.lm_linear_1 = nn.Linear(lm_dim + s2s_dim, lm_dim)
             self.lm_linear_2 = nn.Linear(lm_dim + s2s_dim, self.tgt_vocab_size)
+            self.init_fusion_weights()
         else:
             raise NotImplementedError('join method must be "shallow", "deep" or "cold"')
 
@@ -429,12 +429,14 @@ class FusedSeqModel(SeqModel):
     def count_params(self):
         return super(FusedSeqModel, self).count_params()
 
-    def init_weights(self):
+    def init_fusion_weights(self):
         """Initialize fusion weights.""" 
-        nn.init.xavier_uniform_(self.lm_linear_0)
-        nn.init.xavier_uniform_(self.lm_linear_1)
-        if self.join_method == 'cold':
-            nn.init.xavier_uniform_(self.lm_linear_2)
+        for name, p in model.named_parameters():
+            if name == 'lm_linear_0.weight' or name == 'lm_linear_0.bias' or name == 'lm_linear_1.weight' or name == 'lm_linear_0.bias':
+                nn.init.xavier_uniform_(p)
+            if self.join_method == 'cold':
+                if name == 'lm_linear_2.weight' or name == 'lm_linear_2.bias':
+                    nn.init.xavier_uniform_(p)
 
 
 

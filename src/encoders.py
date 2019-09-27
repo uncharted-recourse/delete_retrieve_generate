@@ -170,29 +170,13 @@ class TransformerXLEncoderLayer(nn.TransformerEncoderLayer):
             dropout: the dropout value (default=0.1).
     """
 
-    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, attention_type = 'absolute'):
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
         super(TransformerXLEncoderLayer, self).__init__(d_model, nhead, dim_feedforward = dim_feedforward, dropout = dropout)
         
-        self.attention_type = attention_type
-        if attention_type == 'absolute':
-            self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        elif attention_type == 'relative':
-            self.self_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
-                dropout, dropatt = dropout)
-            self.dropout1 = None
-            self.norm1 = None
-        else:
-            raise NotImplementedError('attention_type must be "multihead_attention" or "rel_multihead_attention_partial_learnable"')
-
-        # Implementation of Feedforward model
-        # self.linear1 = Linear(d_model, dim_feedforward)
-        # self.dropout = Dropout(dropout)
-        # self.linear2 = Linear(dim_feedforward, d_model)
-
-        # self.norm1 = LayerNorm(d_model)
-        # self.norm2 = LayerNorm(d_model)
-        # self.dropout1 = Dropout(dropout)
-        # self.dropout2 = Dropout(dropout)
+        self.self_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
+            dropout, dropatt = dropout)
+        self.dropout1 = None
+        self.norm1 = None
 
     def forward(self, src, pos_emb, src_mask=None, src_key_padding_mask=None):
         r"""Pass the input through the encoder layer.
@@ -205,15 +189,8 @@ class TransformerXLEncoderLayer(nn.TransformerEncoderLayer):
         Shape:
             see the docs in Transformer class.
         """
-        if self.attention_type == 'absolute':
-            src2 = self.self_attn(src, src, src, attn_mask=src_mask,
-                                key_padding_mask=src_key_padding_mask)[0]
-            src = src + self.dropout1(src2)
-            src = self.norm1(src)
-        elif self.attention_type == 'relative':
-            src = self.self_attn(src, pos_emb, attn_mask = src_mask, 
-                                key_mask = src_key_padding_mask)[0]
-
+        
+        src = self.self_attn(src, pos_emb, attn_mask = src_mask, key_mask = src_key_padding_mask)[0]
         src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
         src = src + self.dropout2(src2)
         src = self.norm2(src)
@@ -228,18 +205,16 @@ class TransformerXLEncoder(nn.Module):
         norm: the layer normalization component (optional).
     """
 
-    def __init__(self, d_model, num_layers, nhead = 8, dim_ff = 2048, dropout = 0.1, attention_type = 'absolute', max_len = 50, clamp_len = 50):
+    def __init__(self, d_model, num_layers, nhead = 8, dim_ff = 2048, dropout = 0.1, clamp_len = 50):
         
         super(TransformerXLEncoder, self).__init__()
-        self.attention_type = attention_type
         self.clamp_len = clamp_len
         self.pos_emb = PositionalEmbedding(d_model)
         self.drop = nn.Dropout(dropout)
         self.norm = nn.LayerNorm(d_model)
-        layer = TransformerXLEncoderLayer(d_model, nhead, dim_feedforward=dim_ff, attention_type=attention_type)
+        layer = TransformerXLEncoderLayer(d_model, nhead, dim_feedforward=dim_ff)
         self.layers = nn.ModuleList([copy.deepcopy(layer) for i in range(num_layers)])
         self.num_layers = num_layers
-
 
         # initialize weights
         self._reset_parameters()
@@ -255,22 +230,14 @@ class TransformerXLEncoder(nn.Module):
         """
         src = src.transpose(0,1)
         qlen = src.shape[0]
+        src_key_padding_mask = src_key_padding_mask.transpose(0,1)
 
-        if self.attention_type == 'absolute':
-            pos_seq = torch.arange(0, max_len, device=src.device, dtype=src.dtype)
-        elif self.attention_type == 'relative':
-            pos_seq = torch.arange(qlen-1, -1, -1.0, device=src.device, dtype=src.dtype)
-            src_key_padding_mask = src_key_padding_mask.transpose(0,1)
-        
+        pos_seq = torch.arange(qlen-1, -1, -1.0, device=src.device, dtype=src.dtype)
         if self.clamp_len > 0:
             pos_seq.clamp_(max=self.clamp_len)
         pos_emb = self.pos_emb(pos_seq)
-
-        if self.attention_type == 'absolute':
-            output = self.drop(src + pos_emb[-qlen:])
-        elif self.attention_type == 'relative':
-            output = self.drop(src)
-            pos_emb = self.drop(pos_emb)
+        output = self.drop(src)
+        pos_emb = self.drop(pos_emb)
 
         for i in range(self.num_layers):
             output = self.layers[i](output, pos_emb, src_key_padding_mask=src_key_padding_mask)

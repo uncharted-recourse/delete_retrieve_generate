@@ -143,33 +143,14 @@ class TransformerXLDecoderLayer(nn.TransformerDecoderLayer):
 
     """
 
-    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, attention_type = 'absolute'):
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
         super(TransformerXLDecoderLayer, self).__init__(d_model, nhead, dim_feedforward = dim_feedforward, dropout = dropout)
 
-        self.attention_type = attention_type
-        if attention_type == 'absolute':
-            self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        elif attention_type == 'relative':
-            self.self_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
-                dropout, dropatt = dropout)
-            self.dropout1 = None
-            self.norm1 = None
-        
-
-        else:
-            raise NotImplementedError('attention_type must be "multihead_attention" or "rel_multihead_attention_partial_learnable"')
-
-        # Implementation of Feedforward model
-        # self.linear1 = Linear(d_model, dim_feedforward)
-        # self.dropout = Dropout(dropout)
-        # self.linear2 = Linear(dim_feedforward, d_model)
-
-        # self.norm1 = LayerNorm(d_model)
-        # self.norm2 = LayerNorm(d_model)
-        # self.norm3 = LayerNorm(d_model)
-        # self.dropout1 = Dropout(dropout)
-        # self.dropout2 = Dropout(dropout)
-        # self.dropout3 = Dropout(dropout)
+        self.self_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
+            dropout, dropatt = dropout)
+        self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.dropout1 = None
+        self.norm1 = None
 
     def forward(self, tgt, memory, pos_emb, tgt_mask=None, memory_mask=None,
                 tgt_key_padding_mask=None, memory_key_padding_mask=None):
@@ -187,17 +168,8 @@ class TransformerXLDecoderLayer(nn.TransformerDecoderLayer):
             see the docs in Transformer class.
         """
 
-        if self.attention_type == 'absolute':
-            tgt2 = self.self_attn(tgt, tgt, tgt, attn_mask=tgt_mask,
-                              key_padding_mask=tgt_key_padding_mask)[0]
-            tgt = tgt + self.dropout1(tgt2)
-            tgt = self.norm1(tgt)
-
-        elif self.attention_type == 'relative':
-            tgt = self.self_attn(tgt, pos_emb, attn_mask = tgt_mask, 
-                                    key_mask = tgt_key_padding_mask)[0]
-        tgt2 = self.multihead_attn(tgt, memory, memory, attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)[0]
+        tgt = self.self_attn(tgt, pos_emb, attn_mask = tgt_mask, key_mask = tgt_key_padding_mask)[0]
+        tgt2 = self.multihead_attn(tgt, memory, memory, attn_mask=memory_mask, key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
         tgt2 = self.linear2(self.dropout(F.relu(self.linear1(tgt))))
@@ -214,15 +186,14 @@ class TransformerXLDecoder(nn.Module):
         norm: the layer normalization component (optional).
     """
 
-    def __init__(self, d_model, num_layers, nhead = 8, dim_ff = 2048, dropout = 0.1, attention_type = 'absolute', clamp_len = 50):
+    def __init__(self, d_model, num_layers, nhead = 8, dim_ff = 2048, dropout = 0.1, clamp_len = 50):
 
         super(TransformerXLDecoder, self).__init__()
-        self.attention_type = attention_type
         self.clamp_len = clamp_len
         self.pos_emb = PositionalEmbedding(d_model)
         self.drop = nn.Dropout(dropout)
         self.norm = nn.LayerNorm(d_model)
-        layer = TransformerXLDecoderLayer(d_model, nhead, dim_feedforward=dim_ff, attention_type=attention_type)
+        layer = TransformerXLDecoderLayer(d_model, nhead, dim_feedforward=dim_ff)
         self.layers = nn.ModuleList([copy.deepcopy(layer) for i in range(num_layers)])
         self.num_layers = num_layers
 
@@ -242,24 +213,15 @@ class TransformerXLDecoder(nn.Module):
         tgt = tgt.transpose(0,1)
         memory = memory.transpose(0,1)
         qlen = tgt.shape[0]
+        tgt_key_padding_mask = tgt_key_padding_mask.transpose(0,1)
 
-        if self.attention_type == 'absolute':
-            pos_seq = torch.arange(0, max_len, device=tgt.device, dtype=tgt.dtype)
-        elif self.attention_type == 'relative':
-            pos_seq = torch.arange(qlen-1, -1, -1.0, device=tgt.device, dtype=tgt.dtype)
-            tgt_key_padding_mask = tgt_key_padding_mask.transpose(0,1)
-
+        pos_seq = torch.arange(qlen-1, -1, -1.0, device=tgt.device, dtype=tgt.dtype)
         if self.clamp_len > 0:
             pos_seq.clamp_(max=self.clamp_len)
         pos_emb = self.pos_emb(pos_seq)
-
-        if self.attention_type == 'absolute':
-            output = self.drop(tgt + pos_emb[-qlen:])
-            attn_mask = self.generate_square_subsequent_mask(qlen)
-        elif self.attention_type == 'relative':
-            output = self.drop(tgt)
-            pos_emb = self.drop(pos_emb)
-            attn_mask = torch.triu(torch.ones((qlen, qlen), dtype=torch.uint8), diagonal=1)[:,:,None]
+        output = self.drop(tgt)
+        pos_emb = self.drop(pos_emb)
+        attn_mask = torch.triu(torch.ones((qlen, qlen), dtype=torch.uint8), diagonal=1)[:,:,None]
         if CUDA:
             attn_mask = attn_mask.cuda()
 
@@ -271,15 +233,6 @@ class TransformerXLDecoder(nn.Module):
         output = self.norm(output)
 
         return output.transpose(0,1)
-
-    def generate_square_subsequent_mask(self, sz):
-        r"""Generate a square mask for the sequence. The masked positions are filled with float('-inf').
-            Unmasked positions are filled with float(0.0). Copied from torch Transformer base class. 
-        """
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
-
 
     def _reset_parameters(self):
         r"""Initiate parameters in the transformer model."""

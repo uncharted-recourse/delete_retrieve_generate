@@ -202,7 +202,9 @@ for epoch in range(start_epoch, config['training']['epochs']):
         style_ids = [i for i, corpus in enumerate(train_data) if idx in range(len(corpus['data']) + 1)]
         train_sample_size = batch_size // len(style_ids)
         idx -= train_sample_size
-        idx = 0 if idx < 0 else idx
+        if idx < 0:
+            train_sample_size += idx
+            idx = 0
 
         train_loss, s_losses = evaluation.calculate_loss(train_data, style_ids, n_styles, config, idx, train_sample_size, max_length, 
             config['model']['model_type'], model, s_discriminators, loss_crit, bt_ratio = config['training']['bt_ratio'])

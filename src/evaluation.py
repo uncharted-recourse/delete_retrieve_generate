@@ -304,7 +304,7 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
     for i in range(max_len):
         # run input through the model
         decoder_logit, word_probs, decoder_states = model(src_input, tgt_input, 
-            srcmask, srclens, aux_input, auxmask, auxlens, tgt_mask)
+            srcmask, srclens, aux_input, auxlens, auxmask, tgt_mask)
         decoder_argmax = word_probs.data.cpu().numpy()[:,-1,:].argmax(axis=-1)
         
         # select the predicted "next" tokens, attach to target-side inputs
@@ -401,6 +401,8 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
         sys.stdout.flush()
 
         # get batch
+        if j + sample_size > min_content_length:
+            sample_size = sample_size - min_content_length + j
         src_packed, auxs_packed, tgt_packed = data.minibatch(test_data, style_ids, len(style_ids), j, 
             sample_size, config['data']['max_len'], config['model']['model_type'], is_test = True)
         _, output_lines_src, _, _, indices = src_packed
@@ -455,12 +457,16 @@ def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
     d_losses = [[]]
     content_lengths = [len(datum['content']) for datum in test_data]
     style_ids = [i for i in range(len(content_lengths))]
+    
+    # round down from sample size
     min_content_length = min(content_lengths)
     for j in range(0, min_content_length, sample_size):
         sys.stdout.write("\r%s/%s..." % (j, min_content_length))
         sys.stdout.flush()
 
         loss_crit = config['training']['loss_criterion']
+        if j + sample_size > min_content_length:
+            sample_size = sample_size - min_content_length + j
         combined_loss, s_losses = calculate_loss(test_data, style_ids, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
             config['model']['model_type'], model, s_discriminators, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test=True)
 
@@ -596,7 +602,7 @@ def decode_top_k(
     for i in range(max_len):
         # run input through the model
         decoder_logits, _, decoder_states = model(src_input, tgt_input, srcmask, srclens,
-            aux_input, auxmask, auxlens, tgt_mask)
+            aux_input, auxlens, auxmask, tgt_mask)
         decoder_logits = decoder_logits.data.cpu().numpy()[:,-1,:]
 
         # if k=1, do greedy sampling
@@ -682,7 +688,7 @@ def beam_search_decode(
             else:
                 # run input through the model
                 decoder_logits = get_next_token_scores(model, src_input, prefix, srcmask, srclens,
-                    aux_input, auxmask, auxlens)
+                    aux_input, auxlens, auxmask)
                 for next_id, next_score in enumerate(decoder_logits):
                     score = prefix_score + next_score
                     next_pred = Variable(torch.from_numpy(np.array([[next_id]])))
