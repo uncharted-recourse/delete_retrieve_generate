@@ -18,121 +18,64 @@ log = get_log_func(__name__)
 
 log("starting flask app", level="debug")
 app = Flask(__name__)
-app.json_encoder = DataEncoder
 app.logger.debug('debug')
 
-# mapping from style names to style transfer model objects
-# each model object contains: 1) weights, 2) config, 3) source corpus, 4) target corpus
-MODELS = {}
+# dictionary mapping style indices to styles
+STYLES = {
+    "informal": 0,
+    "formal": 1,
+    # "humorous": 2,
+    # "romantic": 3
+}
 
-# mapping from style names to prefix strings (used in fnames)
-STYLE_DICT_FORWARD = {}
-STYLE_DICT_BACKWARD = {}
-
-def get_model(style_name):
-    if style_name in MODELS:
-        log("returning preloaded model", level="debug")
-        return MODELS[style_name]
-
-    log("loading new model", level="debug")
-    if style_name in STYLE_DICT_FORWARD:
-        model_fname_prefix = STYLE_DICT_FORWARD[style_name]
-    else: 
-        model_fname_prefix = STYLE_DICT_BACKWARD[style_name]
-    model_config_fpath = f"checkpoints/{model_fname_prefix}/config.json"
-    model_config = read_json(model_config_fpath)
-
-    start_time = time.time()
-    del_and_ret_model, src, tgt = initialize_inference_model(config=model_config)
-    log("model created", level="debug")
-    del_and_ret_model, _ = attempt_load_model(
-        model=del_and_ret_model,
-        checkpoint_dir=f"checkpoints/{model_fname_prefix}",
-        map_location=torch.device('cpu')
-    )
-    log("model weights loaded", level="debug")
-    log(f"{style_name} model initialization and loading took {time.time()-start_time} seconds", level="debug")
-
-    # store the model information in memory before returning
-    MODELS[style_name] = {}
-    MODELS[style_name]['model'] = del_and_ret_model
-    MODELS[style_name]['config'] = model_config
-    MODELS[style_name]['src'] = src
-    MODELS[style_name]['tgt'] = tgt
-
-    return MODELS[style_name]
-
-
-#pre-load formal and romantic models
-STYLE_DICT_FORWARD["formal"] = "del_and_ret-formal"
-STYLE_DICT_BACKWARD["informal"] = "del_and_ret-formal"
-log("loading formal and informal models", level="debug")
-MODELS["informal"] = get_model("formal")
-assert "formal" in MODELS
-assert "informal" in MODELS
-
-STYLE_DICT_FORWARD["romantic"] = "del_and_ret-romantic"
-STYLE_DICT_BACKWARD["humorous"] = "del_and_ret-formal"
-log("loading romantic and humorous models", level="debug")
-MODELS["humorous"] = get_model("romantic")
-assert "romantic" in MODELS
-assert "humorous" in MODELS
-
+# pre-load model with n styles
+start_time = time.time()
+log("loading model", level="debug")
+model_fname_prefix = 'transformer_lm'
+model_config_fpath = f"checkpoints/{model_fname_prefix}/config.json"
+model_config = read_json(model_config_fpath)
+model, tokenizer, train_data = initialize_inference_model(config=model_config)
+log("model created and weights loaded", level="debug")
+log(f"model initialization and loading took {time.time()-start_time} seconds", level="debug")
 
 @app.route("/")
 def homepage():
-    with open("http_api/readme.md") as readme:
-        content = readme.read()
-
-    content = Markup(markdown.markdown(content))
-    return render_template("templates/index.pug", content=content)
-
+    return render_template("translation.html")
 
 @app.route("/style-transfer", methods=["GET", "POST"])
-def req_style_transfer(read_test_data=False):
+def req_style_transfer():
     log("request received", level="debug")
     try:
         if request.is_json:
-            style = request.json.get("style", "formal")
-            text = request.json.get("input_text")
+            data = request.get_json()
+            styles = data["styles"]
+            text = data["input_text"]
         else:
-            style = request.values.get("style", "formal")
+            styles = request.values.getlist("styles")
             text = request.values.get("input_text")
-        if style not in STYLE_DICT_FORWARD and style not in STYLE_DICT_BACKWARD:
-            raise Exception(f"style {style} not supported")
+        log(f'styles: {styles}', level='debug')
+        style_ids = []
+        for style in styles:
+            if style not in STYLES.keys():
+                raise Exception(f"style {style} not supported")
+            else:
+                style_ids.append(STYLES[style])
         if not text:
             raise Exception("no input text found")
-
-        start_time = time.time()
-        log("retreiving model and loading style corpus'", level="debug")
-        del_and_ret_model = get_model(style)
+        log(f'style ids: {style_ids}', level='debug')
 
         log("predicting text", level="debug")
-
-        # set direction of style for models trained on multiple styles
-        if style in STYLE_DICT_FORWARD:
-            forward = True
-            tgt = del_and_ret_model['tgt']
-            src = del_and_ret_model['src']
-        else:
-            forward = False
-            tgt = del_and_ret_model['src']
-            src = del_and_ret_model['tgt']
-        if style == 'romantic' or style == 'humorous':
-            remove_attributes = False
-        else:
-            remove_attributes = True
+        start_time = time.time()
         pred_text = predict_text(text, 
-            del_and_ret_model['model'], 
-            src,
-            tgt,
-            del_and_ret_model['config'],
-            forward=forward,
-            remove_attributes=remove_attributes
+            tokenizer, 
+            style_ids,
+            model_config,
+            model,
+            train_data=train_data,
         )
         log(f"prediction took {time.time()-start_time} seconds", level="debug")
 
-        out = {"output_text": pred_text, "style": style}
+        out = {"output_text": pred_text, "styles": styles}
         out.update(request.values)
         return jsonify(out)
 

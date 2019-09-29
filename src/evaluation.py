@@ -78,13 +78,13 @@ def backpropagation_step(loss, optimizer, retain_graph = False):
     loss.backward(retain_graph = retain_graph)
     optimizer.step()
 
-def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
+def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model, weight_decay = 0):
     """ define optimmizer and scheduler according to learning rate"""
 
     if optimizer_type == 'adam':
-        optimizer = optim.Adam(model.parameters(), lr=lr)
+        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     elif optimizer_type == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr=lr)
+        optimizer = optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay)
     else:
         raise NotImplementedError("Learning method not recommended for this task")
 
@@ -93,8 +93,8 @@ def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
     elif scheduler_type == 'cyclic':
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
-            base_lr = lr,  
-            max_lr = 10 * lr
+            base_lr = lr / 10,  
+            max_lr = lr
         )
     else:
         raise NotImplementedError("Learning scheduler not recommended for this task")

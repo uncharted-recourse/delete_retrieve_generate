@@ -148,7 +148,9 @@ class TransformerXLDecoderLayer(nn.TransformerDecoderLayer):
 
         self.self_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
             dropout, dropatt = dropout)
-        self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        #self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.self_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
+            dropout, dropatt = dropout, unique_query = True)
         self.dropout1 = None
         self.norm1 = None
 
@@ -169,9 +171,10 @@ class TransformerXLDecoderLayer(nn.TransformerDecoderLayer):
         """
 
         tgt = self.self_attn(tgt, pos_emb, attn_mask = tgt_mask, key_mask = tgt_key_padding_mask)[0]
-        tgt2 = self.multihead_attn(tgt, memory, memory, attn_mask=memory_mask, key_padding_mask=memory_key_padding_mask)[0]
-        tgt = tgt + self.dropout2(tgt2)
-        tgt = self.norm2(tgt)
+        tgt = self.multihead_attn(tgt, pos_emb, kv = memory, attn_mask=memory_mask, key_padding_mask=memory_key_padding_mask)[0]
+        # tgt2 = self.multihead_attn(tgt, memory, memory, attn_mask=memory_mask, key_padding_mask=memory_key_padding_mask)[0]
+        # tgt = tgt + self.dropout2(tgt2)
+        # tgt = self.norm2(tgt)
         tgt2 = self.linear2(self.dropout(F.relu(self.linear1(tgt))))
         tgt = tgt + self.dropout3(tgt2)
         tgt = self.norm3(tgt)

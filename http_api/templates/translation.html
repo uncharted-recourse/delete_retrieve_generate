@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!-- Required metadata tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <meta name="description" content="Apply style transfer model to input text">
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css" integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm" crossorigin="anonymous">
+    <title>Style Transfer for Active Social Engineering Defense!</title>
+  </head>
+  <body>
+    <div class="container">
+      <h1><center>Style Transfer for ASED</center></h1>
+      <p><center>Enter text in the box on the left and then select style(s)!</center><br></p>
+      <div class="row">
+        <div class="col">
+          <form>
+            <!-- Enter text to style. -->
+            <div class="form-group">
+              <label for="text-to-style"><strong>Text to be styled:</strong></label>
+              <textarea class="form-control" id="text-to-style" rows="5"></textarea>
+            </div>
+            <!-- Select output styles. -->
+            <div class="form-group">
+              <fieldset>
+                Informal: <input type="checkbox" id="informal">
+                Formal: <input type="checkbox" id="formal">
+              </fieldset>
+            </div>
+            <button type="submit" class="btn btn-primary mb-2" id="style">Style!</button></br>
+          </form>
+        </div>
+        <div class="col">
+            <!-- Styled text rendered here. -->
+            <form>
+              <div class="form-group" id="style-transfer-text-response">
+                <label for="style-transfer-result"><strong>Styled text:</strong></label>
+                <textarea readonly class="form-control" id="style-transfer-result" rows="5"></textarea>
+              </div>
+            </form>
+        </div> 
+      </div>
+    </div>
+
+    <!-- Required Javascript for this tutorial -->
+    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js" integrity="sha384-KJ3o2DKtIkvYIK3UENzmM7KCkRr/rE9/Qpg6aAZGJwFDMVNA/GpGFF93hXpG5KkN" crossorigin="anonymous"></script>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js" integrity="sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q" crossorigin="anonymous"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js" integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl" crossorigin="anonymous"></script>
+    <script type = "text/javascript" src ="static/scripts/main.js"></script>
+  </body>
+</html>

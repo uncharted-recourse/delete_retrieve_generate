@@ -99,8 +99,8 @@ logging.info('...done!')
 batch_size = config['data']['batch_size']
 max_length = config['data']['max_len']
 src_vocab_size = tgt_vocab_size = len(train_data[0]['tokenizer'])
-torch.manual_seed(config['training']['random_seed'])
-np.random.seed(config['training']['random_seed'])
+#torch.manual_seed(config['training']['random_seed'])
+#np.random.seed(config['training']['random_seed'])
 writer = SummaryWriter(working_dir)
 
 # define and load model
@@ -122,7 +122,7 @@ if CUDA:
 # define learning rate and scheduler
 scheduler_name = config['training']['scheduler']
 optimizer, scheduler = evaluation.define_optimizer_and_scheduler(config['training']['learning_rate'], 
-    config['training']['optimizer'], scheduler_name, model)
+    config['training']['optimizer'], scheduler_name, model, config['training']['weight_decay'])
 
 # define discriminator model, optimizers, and schedulers if adverarial paradigm
 if config['training']['discriminator_ratio'] > 0:
@@ -133,6 +133,7 @@ if config['training']['discriminator_ratio'] > 0:
         hidden_dim,
         working_dir, 
         config['training']['discriminator_learning_rate'],
+        config['training']['weight_decay']
         config['training']['optimizer'], 
         scheduler_name)
 else:
@@ -155,7 +156,7 @@ losses_discrim = [[]]
 
 # training loop params
 assert batch_size >= n_styles, "Batch size must be greater than or equal to the number of styles"
-sample_size = batch_size // n_styles
+sample_size = batch_size // n_styles * 2
 content_lengths = [len(datum['content']) for datum in train_data]
 
 # if adversarial paradigm always need >= 2 styles in minibatch to compare decoder states
@@ -270,8 +271,9 @@ for epoch in range(start_epoch, config['training']['epochs']):
     # evaluate on dev set, update scheduler
     start = time.time()
     model.eval()
-    dev_loss, d_dev_losses = evaluation.evaluate_lpp(
-            model, s_discriminators, test_data, sample_size, config)
+    with torch.no_grad():
+        dev_loss, d_dev_losses = evaluation.evaluate_lpp(
+                model, s_discriminators, test_data, sample_size, config)
 
     writer.add_scalar('eval/loss', dev_loss, epoch)
     #writer.add_scalar('stats/mean_entropy', mean_entropy, epoch)
@@ -286,11 +288,12 @@ for epoch in range(start_epoch, config['training']['epochs']):
              # write information to tensorboard
             [writer.add_scalar('eval/loss_discriminator_style_{}', d_dev_loss, epoch) for idx, d_dev_loss in enumerate(d_dev_losses)]
     # write predictions and ground truths to checkpoint dir
-    if args.bleu and epoch >= config['training'].get('inference_start_epoch', 1):
+    if args.bleu and epoch >= config['training'].get('inference_start_epoch', 0):
         
         num_samples = config['training']['num_samples']
-        cur_metrics, edit_distances, inputs, preds, golds, auxs = evaluation.inference_metrics(
-            model, test_data, sample_size, num_samples, config)
+        with torch.no_grad():
+            cur_metrics, edit_distances, inputs, preds, golds, auxs = evaluation.inference_metrics(
+                model, test_data, sample_size, num_samples, config)
         
         # metrics averaged over metric for each style
         cur_metric = np.mean(cur_metrics)

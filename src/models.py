@@ -212,10 +212,22 @@ class SeqModel(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
 
         self.init_weights()
+        if self.options['tie_weights']:
+            self.tie_weights(self.output_projection, self.tgt_embedding)
+
+    def tie_weights(self, first_module, second_module):
+        """Tie the input and output embeddings"""
+        first_module.weight = second_module.weight
+        if hasattr(first_module, 'bias') and first_module.bias is not None:
+            first_module.bias.data = torch.nn.functional.pad(
+                first_module.bias.data,
+                (0, first_module.weight.shape[0] - first_module.bias.shape[0]),
+                'constant',
+                0
+            )
 
     def init_weights(self):
         """Initialize weights.""" 
-        # TODO: should these be replaced with xavier_uniform??
         initrange = 0.1
         self.src_embedding.weight.data.uniform_(-initrange, initrange)
         self.tgt_embedding.weight.data.uniform_(-initrange, initrange)
@@ -257,12 +269,12 @@ class SeqModel(nn.Module):
                 h_t = self.h_bridge(h_t)
             elif self.options['encoder'] == 'transformer':
                 a_ht = torch.unsqueeze(a_ht, 1)
-                src_outputs = torch.cat((a_ht, src_outputs_encoder), 1)
+                src_outputs = torch.cat((a_ht, src_outputs_encoder), -1)
                 src_outputs = self.ctx_bridge(src_outputs)
-                a_mask = Variable(torch.BoolTensor([[False] for i in range(input_src.size(0))]))
-                if CUDA:
-                    a_mask = a_mask.cuda()
-                srcmask = torch.cat((a_mask, srcmask), dim = 1)
+                # a_mask = Variable(torch.BoolTensor([[False] for i in range(input_src.size(0))]))
+                # if CUDA:
+                #     a_mask = a_mask.cuda()
+                # srcmask = torch.cat((a_mask, srcmask), dim = 1)
         elif self.model_type == 'delete_retrieve':
             attr_embs = self.src_embedding(input_attr)
             attr_emb = torch.mean(attr_embs, dim=-2) if attr_embs.shape[1] > 1 else attr_embs.squeeze(1)
