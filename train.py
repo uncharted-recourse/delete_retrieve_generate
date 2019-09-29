@@ -133,7 +133,7 @@ if config['training']['discriminator_ratio'] > 0:
         hidden_dim,
         working_dir, 
         config['training']['discriminator_learning_rate'],
-        config['training']['weight_decay']
+        config['training']['weight_decay'],
         config['training']['optimizer'], 
         scheduler_name)
 else:

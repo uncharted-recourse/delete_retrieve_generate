@@ -149,7 +149,7 @@ class TransformerXLDecoderLayer(nn.TransformerDecoderLayer):
         self.self_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
             dropout, dropatt = dropout)
         #self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        self.self_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
+        self.multihead_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
             dropout, dropatt = dropout, unique_query = True)
         self.dropout1 = None
         self.norm1 = None

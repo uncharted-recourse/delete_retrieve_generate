@@ -151,10 +151,7 @@ class SeqModel(nn.Module):
             self.attribute_embedding = nn.Embedding(
                 num_embeddings=len(config['data']['test']), 
                 embedding_dim=self.options['emb_dim'])
-            if self.options['encoder'] == 'lstm':
-                attr_size = self.options['emb_dim']
-            elif self.options['encoder'] == 'transformer':
-                attr_size = 0
+            attr_size = self.options['emb_dim']
 
         elif self.model_type == 'delete_retrieve':
             if self.options['encoder'] == 'lstm':
@@ -268,7 +265,7 @@ class SeqModel(nn.Module):
                 h_t = torch.cat((h_t_encoder, a_ht), -1)
                 h_t = self.h_bridge(h_t)
             elif self.options['encoder'] == 'transformer':
-                a_ht = torch.unsqueeze(a_ht, 1)
+                a_ht = torch.unsqueeze(a_ht, 1).expand_as(src_outputs_encoder)
                 src_outputs = torch.cat((a_ht, src_outputs_encoder), -1)
                 src_outputs = self.ctx_bridge(src_outputs)
                 # a_mask = Variable(torch.BoolTensor([[False] for i in range(input_src.size(0))]))

@@ -61,7 +61,7 @@ class LSTMEncoder(nn.Module):
 
 class MaskedRelPartialLearnableMultiHeadAttn(RelPartialLearnableMultiHeadAttn):
     """ subclass of RelPartialLearnableMultiHeadAttn that supports masking per instance"""
-    def __init__(self, *args, **kwargs, unique_query = False):
+    def __init__(self, *args, unique_query = False, **kwargs):
         super(MaskedRelPartialLearnableMultiHeadAttn, self).__init__(*args, **kwargs)
         
         if unique_query:
@@ -75,7 +75,8 @@ class MaskedRelPartialLearnableMultiHeadAttn(RelPartialLearnableMultiHeadAttn):
         # only post layer normalization
         # mems concatenated with key-value if key-value differnet from query
 
-        qlen, klen, rlen, bsz = w.size(0), kv.size(0), r.size(0), w.size(1)
+        qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
+        klen = qlen if kv is None else kv.size(0)
 
         if mems is not None:
             if kv is None:
@@ -92,7 +93,7 @@ class MaskedRelPartialLearnableMultiHeadAttn(RelPartialLearnableMultiHeadAttn):
         
         else:
             if kv is None:
-                w_heads = self.qkv_net(cat)
+                w_heads = self.qkv_net(w)
                 w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
             else:
                 w_head_q = self.q_net(w)
@@ -100,7 +101,6 @@ class MaskedRelPartialLearnableMultiHeadAttn(RelPartialLearnableMultiHeadAttn):
                 w_head_k, w_head_v = torch.chunk(kv_heads, 2, dim=-1)
 
         r_head_k = self.r_net(r)
-        klen = w_head_k.size(0)
 
         w_head_q = w_head_q.view(qlen, bsz, self.n_head, self.d_head)           # qlen x bsz x n_head x d_head
         w_head_k = w_head_k.view(klen, bsz, self.n_head, self.d_head)           # qlen x bsz x n_head x d_head
