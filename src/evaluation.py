@@ -402,7 +402,7 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
 
         # get batch
         if j + sample_size > min_content_length:
-            sample_size = sample_size - min_content_length + j
+            sample_size = min_content_length - j
         src_packed, auxs_packed, tgt_packed = data.minibatch(test_data, style_ids, len(style_ids), j, 
             sample_size, config['data']['max_len'], config['model']['model_type'], is_test = True)
         _, output_lines_src, _, _, indices = src_packed
@@ -429,7 +429,7 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
             if config['model']['model_type'] == 'delete':
                 auxs[i] += [[str(x[0])] for x in input_ids_aux[i*sample_size:(i+1)*sample_size].data.cpu().numpy()] # because of list comp in inference_metrics()
             elif config['model']['model_type'] == 'delete_retrieve':
-                auxs[i] += ids_to_toks(input_ids_aux[i*sample_size:(i+1)*sample_size], tokenizer, sort = False)
+                auxs[i] += ids_to_toks(input_ids_aux[i*sample_size:(i+1)*sample_size].squeeze(-1), tokenizer, sort = False)
             elif config['model']['model_type'] == 'seq2seq':
                 auxs[i] += ['None' for _ in range(sample_size)]
     return inputs, preds, ground_truths, auxs
@@ -466,7 +466,7 @@ def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
 
         loss_crit = config['training']['loss_criterion']
         if j + sample_size > min_content_length:
-            sample_size = sample_size - min_content_length + j
+            sample_size = min_content_length - j
         combined_loss, s_losses = calculate_loss(test_data, style_ids, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
             config['model']['model_type'], model, s_discriminators, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test=True)
 

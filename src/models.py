@@ -431,11 +431,11 @@ class FusedSeqModel(SeqModel):
 
     def init_fusion_weights(self):
         """Initialize fusion weights.""" 
-        for name, p in model.named_parameters():
-            if name == 'lm_linear_0.weight' or name == 'lm_linear_0.bias' or name == 'lm_linear_1.weight' or name == 'lm_linear_0.bias':
+        for name, p in self.named_parameters():
+            if name == 'lm_linear_0.weight' or name == 'lm_linear_1.weight':
                 nn.init.xavier_uniform_(p)
             if self.join_method == 'cold':
-                if name == 'lm_linear_2.weight' or name == 'lm_linear_2.bias':
+                if name == 'lm_linear_2.weight':
                     nn.init.xavier_uniform_(p)
 
 

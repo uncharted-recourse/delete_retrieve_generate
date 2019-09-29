@@ -41,7 +41,6 @@
         "src_layers": 1,
         "tgt_hidden_dim": 512,
         "tgt_layers": 1,
-        "positional_encoding": "absolute",
         "decode": "top_k",
         "beam_width": 5,
         "k": 5,

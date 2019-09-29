@@ -538,8 +538,11 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
                 tgt_idx = random.choice(style_ids)
                 while tgt_idx == i or tgt_idx in out_dataset_ordering:
                     tgt_idx = random.choice(style_ids)
-            elif is_test: # test translate to next style in list for consistent eval over time
-                tgt_idx = (i + 1) % n_styles
+            elif is_test: # test translate to parallel corpus style for accurate evaluation
+                if i == 0 or i == 2:
+                    tgt_idx = i+1
+                else:
+                    tgt_idx = i-1
             else: # train, sample style
                 tgt_idx = i
             out_dataset_ordering.append(tgt_idx)
@@ -554,7 +557,6 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
     in_data = [dataset['data'] for dataset in in_datasets]
     out_data = [out_datasets[i]['data'] for i in out_dataset_ordering]
     out_attributes = [out_datasets[i]['attribute'] for i in out_dataset_ordering]
-    out_dist_measurers = [dataset['dist_measurer'][i] for dataset, i in zip(in_datasets, out_dataset_ordering)]
     tokenizer = datasets[0]['tokenizer']
     if model_type == 'delete':
         inputs = get_minibatch(
@@ -573,6 +575,7 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
         attributes = (attribute_ids, None, None, None, None)
 
     elif model_type == 'delete_retrieve':
+        out_dist_measurers = [dataset['dist_measurer'][i] for dataset, i in zip(in_datasets, out_dataset_ordering)]
         inputs =  get_minibatch(
             in_content, tokenizer, input_idx, batch_size, max_len, sort=False)
         outputs = get_minibatch(
