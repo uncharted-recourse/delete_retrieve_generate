@@ -148,7 +148,7 @@ class TransformerXLDecoderLayer(nn.TransformerDecoderLayer):
 
         self.self_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
             dropout, dropatt = dropout)
-        #self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
         self.multihead_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
             dropout, dropatt = dropout, unique_query = True)
         self.dropout1 = None
@@ -171,10 +171,9 @@ class TransformerXLDecoderLayer(nn.TransformerDecoderLayer):
         """
 
         tgt = self.self_attn(tgt, pos_emb, attn_mask = tgt_mask, key_mask = tgt_key_padding_mask)[0]
-        tgt = self.multihead_attn(tgt, pos_emb, kv = memory, attn_mask=memory_mask, key_padding_mask=memory_key_padding_mask)[0]
-        # tgt2 = self.multihead_attn(tgt, memory, memory, attn_mask=memory_mask, key_padding_mask=memory_key_padding_mask)[0]
-        # tgt = tgt + self.dropout2(tgt2)
-        # tgt = self.norm2(tgt)
+        tgt2 = self.multihead_attn(tgt, memory, memory, attn_mask=memory_mask, key_padding_mask=memory_key_padding_mask)[0]
+        tgt = tgt + self.dropout2(tgt2)
+        tgt = self.norm2(tgt)
         tgt2 = self.linear2(self.dropout(F.relu(self.linear1(tgt))))
         tgt = tgt + self.dropout3(tgt2)
         tgt = self.norm3(tgt)
@@ -213,8 +212,7 @@ class TransformerXLDecoder(nn.Module):
             memory_key_padding_mask: the mask for the memory keys per batch (optional).
 
         """
-        tgt = tgt.transpose(0,1)
-        memory = memory.transpose(0,1)
+        tgt, memory = tgt.transpose(0,1), memory.transpose(0,1)
         qlen = tgt.shape[0]
         tgt_key_padding_mask = tgt_key_padding_mask.transpose(0,1)
 
@@ -224,6 +222,7 @@ class TransformerXLDecoder(nn.Module):
         pos_emb = self.pos_emb(pos_seq)
         output = self.drop(tgt)
         pos_emb = self.drop(pos_emb)
+
         attn_mask = torch.triu(torch.ones((qlen, qlen), dtype=torch.uint8), diagonal=1)[:,:,None]
         if CUDA:
             attn_mask = attn_mask.cuda()

@@ -92,9 +92,10 @@ def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model, we
     if scheduler_type == 'plateau':
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
     elif scheduler_type == 'cyclic':
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
+        scheduler = optim.lr_scheduler.CyclicLR(optimizer, 
             base_lr = lr / 10,  
-            max_lr = lr
+            max_lr = lr,
+            cycle_momentum = False,
         )
     else:
         raise NotImplementedError("Learning scheduler not recommended for this task")
