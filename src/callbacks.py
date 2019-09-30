@@ -1,9 +1,9 @@
-
 import numpy as np 
 import logging
 import os
 from utils.log_func import get_log_func
 import sys
+import json
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -28,7 +28,7 @@ def on_train_start(config):
             config: config file
      
     """
-    
+
     # save all checkpoint folders to checkpoint dir
     working_dir = os.path.join("checkpoints", config['data']['working_dir'])
     vocab_dir = os.path.join("checkpoints", config['data']['vocab_dir'])
@@ -45,6 +45,8 @@ def on_train_start(config):
     if not os.path.exists(config_path):
         with open(config_path, 'w') as f:
             json.dump(config, f)
+            
+    return working_dir, vocab_dir, lm_dir    
 
 class EarlyStopping(object):
     """ class that monitors a metric and stops training when the metric has stopped improving

@@ -479,7 +479,8 @@ def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
 
     # put models in eval mode
     model.eval()
-    [discriminator.eval() for discriminator in s_discriminators]
+    if s_discriminators is not None:
+        [discriminator.eval() for discriminator in s_discriminators]
 
     losses = []
     d_losses = [[]]

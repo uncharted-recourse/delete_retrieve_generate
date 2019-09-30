@@ -43,7 +43,7 @@ args = parser.parse_args()
 config = json.load(open(args.config, 'r'))
 
 # save all checkpoint folders to checkpoint dir
-callbacks.on_train_start(config)
+working_dir, vocab_dir, lm_dir = callbacks.on_train_start(config)
 
 # set up logging
 logging.basicConfig(
@@ -249,7 +249,8 @@ for epoch in range(start_epoch, config['training']['epochs']):
         dev_loss, d_dev_losses = evaluation.evaluate_lpp(model, s_discriminators, test_data, sample_size, config)
 
     writer.add_scalar('eval/loss', dev_loss, epoch)
-    [writer.add_scalar('eval/loss_discriminator_style_{}', d_dev_loss, epoch) for idx, d_dev_loss in enumerate(d_dev_losses)]
+    if s_discriminators is not None:
+        [writer.add_scalar('eval/loss_discriminator_style_{}', d_dev_loss, epoch) for idx, d_dev_loss in enumerate(d_dev_losses)]
     #writer.add_scalar('stats/mean_entropy', mean_entropy, epoch)
     
     if scheduler_name == 'plateau':
@@ -266,7 +267,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         num_samples = config['training']['num_samples']
         with torch.no_grad():
             cur_metrics, edit_distances, inputs, preds, golds, auxs = evaluation.inference_metrics(
-                model, test_data, sample_size, num_samples, config)
+                model, s_discriminators, test_data, sample_size, num_samples, config)
         
         # metrics averaged over metric for each style
         cur_metric = np.mean(cur_metrics)

@@ -551,7 +551,7 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
             out_dataset_ordering.append(tgt_idx)
     else:
         # handle special BT case opposite direction
-        #out_dataset_ordering = [i for i in range(n_styles)]
+        out_dataset_ordering = style_ids
         out_datasets = bt_orig_datasets
         # because bt input dataset always starts at idx 0
         input_idx = 0
@@ -568,7 +568,7 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
             out_data, tokenizer, idx, batch_size, max_len, idx=inputs[-1])
 
         # true length could be less than batch_size at edge of data
-        batch_len = len(outputs[0]) // len(style_ids)
+        batch_len = len(inputs[0]) // len(style_ids)
         attribute_ids = [[attribute_id] * batch_len for attribute_id in out_dataset_ordering]
         attribute_ids = [attr_id for id_list in attribute_ids for attr_id in id_list]
         attribute_ids = Variable(torch.unsqueeze(torch.LongTensor(attribute_ids), 1))
