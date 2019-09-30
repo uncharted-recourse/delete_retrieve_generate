@@ -27,7 +27,7 @@
     "batch_size": 128,
     "max_len": 50,
     "permutation": 3,
-    "working_dir": "transformer_dropout",
+    "working_dir": "best_model",
     "vocab_dir": "noise_vocab",
     "lm_dir": "gpt_model"
   },
@@ -43,10 +43,10 @@
         "tgt_hidden_dim": 512,
         "tgt_layers": 1,
         "tie_weights": false,
-        "decode": "top_k",
+        "decode": "greedy",
         "beam_width": 5,
         "k": 5,
         "temperature": 1.0,
-        "dropout": 0.3
+        "dropout": 0.5
     }
 }

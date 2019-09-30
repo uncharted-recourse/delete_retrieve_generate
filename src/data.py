@@ -476,7 +476,7 @@ def back_translation_minibatch(datasets, style_ids, n_styles, config, batch_idx,
         input_content,
         input_aux
     )
-    logging.info(f'Predicting one BT minibatch took {time.time() - s} seconds')
+    log(f'Predicting one BT minibatch took {time.time() - s} seconds', level = 'debug')
     preds = evaluation.ids_to_toks(tgt_pred, tokenizer, sort=False)
 
     # get minibatch of decoded inputs, attributes, outputs in original style direction

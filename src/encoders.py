@@ -61,44 +61,24 @@ class LSTMEncoder(nn.Module):
 
 class MaskedRelPartialLearnableMultiHeadAttn(RelPartialLearnableMultiHeadAttn):
     """ subclass of RelPartialLearnableMultiHeadAttn that supports masking per instance"""
-    def __init__(self, *args, unique_query = False, **kwargs):
+    def __init__(self, *args, **kwargs):
         super(MaskedRelPartialLearnableMultiHeadAttn, self).__init__(*args, **kwargs)
-        
-        if unique_query:
-            self.q_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
-            self.kv_net = nn.Linear(self.d_model, 2 * self.n_head * self.d_head, bias=False)
-            self.qkv_net = None
-
-        #self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
 
     def forward(self, w, r, kv = None, attn_mask=None, key_mask = None, mems=None, head_mask=None):        
         # only post layer normalization
-        # mems concatenated with key-value if key-value differnet from query
 
         qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
-        klen = qlen if kv is None else kv.size(0)
+        klen = qlen
 
         if mems is not None:
-            if kv is None:
-                cat = torch.cat([mems, w], 0)
-                w_heads = self.qkv_net(cat)
-                w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
-                w_head_q = w_head_q[-qlen:]
-            else:
-                cat = torch.cat([mems, kv], 0)
-                w_head_q = self.q_net(w)
-                kv_heads = self.kv_net(kv)
-                w_head_k, w_head_v = torch.chunk(kv_heads, 2, dim=-1)
-                w_head_k, w_head_v = w_head_k[-klen:], w_head_v[-klen:]
+            cat = torch.cat([mems, w], 0)
+            w_heads = self.qkv_net(cat)
+            w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
+            w_head_q = w_head_q[-qlen:]
         
         else:
-            if kv is None:
-                w_heads = self.qkv_net(w)
-                w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
-            else:
-                w_head_q = self.q_net(w)
-                kv_heads = self.kv_net(kv)
-                w_head_k, w_head_v = torch.chunk(kv_heads, 2, dim=-1)
+            w_heads = self.qkv_net(w)
+            w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
 
         r_head_k = self.r_net(r)
 

@@ -19,6 +19,7 @@ from src.cuda import CUDA
 import src.data as data
 import src.models as models
 import src.discriminators as discriminators
+import src.callbacks as callbacks
 import random
 
 
@@ -102,6 +103,9 @@ src_vocab_size = tgt_vocab_size = len(train_data[0]['tokenizer'])
 #torch.manual_seed(config['training']['random_seed'])
 #np.random.seed(config['training']['random_seed'])
 writer = SummaryWriter(working_dir)
+
+# Early stopping callback
+early_stopping = callbacks.EarlyStopping(increase_good=False)
 
 # define and load model
 model = models.FusedSeqModel(
@@ -314,6 +318,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
     else:
         cur_metric = dev_loss
    
+    #early_stopping(dev_loss)
     model.train()
     logging.info('METRIC: %s. TIME: %.2fs CHECKPOINTING...' % (cur_metric, (time.time() - start)))
     avg_loss = np.mean(epoch_loss)

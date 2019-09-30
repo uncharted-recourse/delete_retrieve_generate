@@ -96,6 +96,12 @@ def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model, we
             base_lr = lr / 10,  
             max_lr = lr,
             cycle_momentum = False,
+            #step_size_up = 4000,
+            mode = 'exp_range'
+        )
+    elif scheduler_type == 'cosine':
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer,
+            T_max = 10
         )
     else:
         raise NotImplementedError("Learning scheduler not recommended for this task")
