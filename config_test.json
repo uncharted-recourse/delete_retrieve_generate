@@ -1,7 +1,7 @@
 {
   "training": {
     "optimizer": "adam",
-    "scheduler": "plateau",
+    "scheduler": "cyclic",
     "learning_rate": 0.0003,
     "weight_decay": 0,
     "discriminator_learning_rate": 0.0003,

@@ -72,6 +72,17 @@ def get_edit_distance(hypotheses, reference):
 
     return ed * 1.0 / len(hypotheses)
 
+def update_training_index(cur_index, n_styles, batch_size):
+    """ returns the next idx and sample size given current index, number of styles supported in 
+        index region and batch size
+    """
+    train_sample_size = batch_size // n_styles
+    cur_index -= train_sample_size
+    if cur_index < 0:
+        train_sample_size += cur_index
+        cur_index = 0
+    return cur_index, train_sample_size
+
 def backpropagation_step(loss, optimizer, retain_graph = False):
     """ perform one step of backpropagation"""
     optimizer.zero_grad()
@@ -97,7 +108,6 @@ def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model, we
             max_lr = lr,
             cycle_momentum = False,
             #step_size_up = 4000,
-            mode = 'exp_range'
         )
     elif scheduler_type == 'cosine':
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer,
@@ -318,6 +328,7 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
         next_preds = Variable(torch.from_numpy(decoder_argmax))
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
         next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] for cur, prev in zip(decoder_argmax, prev_mask)]
+        next_mask = torch.BoolTensor(next_mask)
         if CUDA:
             next_preds = next_preds.cuda()
             next_mask = next_mask.cuda()
@@ -442,7 +453,7 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
     return inputs, preds, ground_truths, auxs
 
 
-def inference_metrics(model, test_data, sample_size, num_samples, config):
+def inference_metrics(model, s_discriminators, test_data, sample_size, num_samples, config):
     """ decode and evaluate bleu """
     inputs, preds, ground_truths, auxs = decode_dataset(
         model, test_data, sample_size, num_samples, config)
@@ -454,12 +465,22 @@ def inference_metrics(model, test_data, sample_size, num_samples, config):
     ground_truths = [''.join(seq) for g in ground_truths for seq in g]
     auxs = [''.join(seq) for a in auxs for seq in a]
 
+    # put models back in train mode
+    model.train()
+    if s_discriminators is not None:
+        [discriminator.train() for discriminator in s_discriminators]
+
     return bleus, edit_distances, inputs, preds, ground_truths, auxs
 
 def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
     """ evaluate log perplexity WITHOUT decoding
         (i.e., with teacher forcing)
     """
+
+    # put models in eval mode
+    model.eval()
+    [discriminator.eval() for discriminator in s_discriminators]
+
     losses = []
     d_losses = [[]]
     content_lengths = [len(datum['content']) for datum in test_data]

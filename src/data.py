@@ -276,9 +276,12 @@ def get_tokenizer(encoder = 'gpt2',
     #tokenized_lines = [[str(e) for e in tokenizer.encode(line)] for line in lines]
     return tokenizer
 
-def read_nmt_data(input_lines, n_styles, config, train_data=None, cache_dir = None):
+def read_nmt_data(n_styles, config, train_data=None, cache_dir = None):
     """ create dictionary of data objects for each corpus after extract attributes. also init tokenizer """
     """ input lines is list of different style corpus' """
+
+    train_test_string = 'train' if train_data is None else 'test'
+    input_lines = [[l.strip().split() for l in open(config['data'][train_test_string][i], 'r')] for i in range(n_styles)]
 
     # 1. Perform noising
     # A.  do noisy masking according to Lample et. al (2017) - in extract_attributes()

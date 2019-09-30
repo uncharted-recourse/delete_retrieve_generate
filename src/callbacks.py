@@ -4,7 +4,6 @@ import logging
 import os
 from utils.log_func import get_log_func
 import sys
-sys.exit()
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -22,7 +21,32 @@ def mean_masked_entropy(probs, y_true, pad_id):
     # average over unmasked sequence positions, then over samples
     return np.mean(np.sum(entropy, axis=-1) / np.sum(mask, axis=-1))
 
- class EarlyStopping(object):
+def on_train_start(config):
+    """ sets up checkpoint folders and logging according to the config
+
+        Args:
+            config: config file
+     
+    """
+    
+    # save all checkpoint folders to checkpoint dir
+    working_dir = os.path.join("checkpoints", config['data']['working_dir'])
+    vocab_dir = os.path.join("checkpoints", config['data']['vocab_dir'])
+    lm_dir = os.path.join("checkpoints", config['data']['lm_dir'])
+
+    if not os.path.exists(working_dir):
+        os.makedirs(working_dir)
+    if not os.path.exists(vocab_dir):
+        os.makedirs(vocab_dir)
+    if not os.path.exists(lm_dir):
+        os.makedirs(lm_dir)
+
+    config_path = os.path.join(working_dir, 'config.json')
+    if not os.path.exists(config_path):
+        with open(config_path, 'w') as f:
+            json.dump(config, f)
+
+class EarlyStopping(object):
     """ class that monitors a metric and stops training when the metric has stopped improving
     
         Args: 
