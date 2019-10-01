@@ -83,7 +83,8 @@ def update_training_index(cur_index, n_styles, batch_size):
         cur_index = 0
     return cur_index, train_sample_size
 
-def backpropagation_step(loss, optimizer, batch_idx, update_frequency = 1, retain_graph = False):
+def backpropagation_step(loss, optimizer, scheduler, scheduler_name, batch_idx, 
+        update_frequency = 1, retain_graph = False):
     """ perform one step of backpropagation (supports accumulated gradients)"""
     loss.backward(retain_graph = retain_graph)
 
@@ -91,6 +92,8 @@ def backpropagation_step(loss, optimizer, batch_idx, update_frequency = 1, retai
         # every update_frequency batches update accumulated gradients
         optimizer.zero_grad()
         optimizer.step()
+        if scheduler_name == 'cyclic' or scheduler_name == 'cosine':
+            scheduler.step()
 
 def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model, weight_decay = 0):
     """ define optimmizer and scheduler according to learning rate"""

@@ -41,7 +41,7 @@ def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None, map_loc
 
     assert checkpoint_dir or checkpoint_path
     if checkpoint_dir:
-        epoch, checkpoint_path = get_latest_ckpt(checkpoint_dir)
+        epoch, checkpoint_path = get_latest_ckpt(checkpoint_dir, model_type=model_type)
     else:
         epoch = int(checkpoint_path.split('.')[-2])
 

@@ -163,7 +163,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         # rm old checkpoints
         for ckpt_path in glob.glob(working_dir + '/model.*'):
             os.system("rm %s" % ckpt_path)
-        for ckpt_path in glob.glob(working_dir + '/s_discriminator.*'):
+        for ckpt_path in glob.glob(working_dir + '/s_discriminator*'):
             os.system("rm %s" % ckpt_path)
 
         # replace with new checkpoint
@@ -202,11 +202,9 @@ for epoch in range(start_epoch, config['training']['epochs']):
         # update discriminator optimizer and schedulers
         if s_discriminators is not None:
             bp_t = time.time()
-            [evaluation.backpropagation_step(l, opt, batch_idx, update_frequency, retain_graph=True) for l, opt in zip(s_losses, d_optimizers)]
+            [evaluation.backpropagation_step(l, opt, batch_idx, sched, scheduler_name, update_frequency, 
+                retain_graph=True) for l, opt, sched in zip(s_losses, d_optimizers, d_schedulers)]
             logging.debug(f'backpropagation through discriminators took: {time.time() - bp_t} seconds')
-
-            if scheduler_name == 'cyclic' or scheduler_name == 'cosine':
-                [d_scheduler.step() for scheduler in d_schedulers]
     
             # write information to tensorboard
             norms = [nn.utils.clip_grad_norm_(d.parameters(), config['training']['max_norm']) for d in s_discriminators]
@@ -228,7 +226,6 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
         if scheduler_name == 'cyclic' or scheduler_name == 'cosine':
             writer.add_scalar('stats/lr', scheduler.get_lr(), STEP)
-            scheduler.step()
 
         if args.overfit or batch_idx % config['training']['batches_per_report'] == 0:
 
@@ -257,7 +254,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
     writer.add_scalar('eval/loss', dev_loss, epoch)
     if s_discriminators is not None:
-        [writer.add_scalar('eval/loss_discriminator_style_{}', d_dev_loss, epoch) for idx, d_dev_loss in enumerate(d_dev_losses)]
+        [writer.add_scalar(f'eval/loss_discriminator_style_{idx}', d_dev_loss, epoch) for idx, d_dev_loss in enumerate(d_dev_losses)]
     #writer.add_scalar('stats/mean_entropy', mean_entropy, epoch)
     
     if scheduler_name == 'plateau':
