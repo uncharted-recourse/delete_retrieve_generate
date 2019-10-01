@@ -21,12 +21,6 @@ import src.models as models
 import src.discriminators as discriminators
 import src.callbacks as callbacks
 import random
-from utils.log_func import get_log_func
-
-log_level = os.getenv("LOG_LEVEL", "WARNING")
-root_logger = logging.getLogger()
-root_logger.setLevel(log_level)
-log = get_log_func(__name__)
 
 # maximum batch sizes from experimentation on GPU
 MAX_BS = 64
@@ -60,18 +54,18 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename='%s/train_log' % working_dir,
 )
-#console = logging.StreamHandler()
+console = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-#console.setFormatter(formatter)
+console.setFormatter(formatter)
 filelog = logging.FileHandler('%s/train_log' % working_dir)
 filelog.setFormatter(formatter)
 logger = logging.getLogger('')
-#logger.addHandler(console)
+logger.addHandler(console)
 logger.addHandler(filelog)
-#logger.setLevel(logging.INFO)
+logger.setLevel(logging.INFO)
 
 # read data
-log('Reading data ...', level = 'info')
+logging.info('Reading data ...')
 n_styles = len(config['data']['train'])
 train_data = data.read_nmt_data(
    n_styles = n_styles,
@@ -84,7 +78,7 @@ test_data = data.read_nmt_data(
     train_data=train_data,
     cache_dir=vocab_dir
 )
-log('...done!', level='info')
+logging.info('...done!')
 
 # grab important params from config
 batch_size = config['data']['batch_size']
@@ -106,7 +100,7 @@ model = models.FusedSeqModel(
    config=config,
 )
 trainable, untrainable = model.count_params()
-log(f'MODEL HAS {trainable} trainable params and {untrainable} untrainable params', level='info')
+logging.info(f'MODEL HAS {trainable} trainable params and {untrainable} untrainable params')
 model, start_epoch = models.attempt_load_model(
     model=model,
     checkpoint_dir=working_dir)
@@ -241,7 +235,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
             info = (epoch, num_batches - idx / sample_size, num_batches, wps, avg_loss, cur_metric)
             writer.add_scalar('stats/WPS', wps, STEP)
             writer.add_scalar('stats/loss', avg_loss, STEP)
-            log('EPOCH: %s ITER: %s/%s WPS: %.2f LOSS: %.4f METRIC: %.4f' % info, level = 'info')
+            logging.info('EPOCH: %s ITER: %s/%s WPS: %.2f LOSS: %.4f METRIC: %.4f' % info)
             start_since_last_report = time.time()
             words_since_last_report = 0
             losses_since_last_report = []
@@ -251,7 +245,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
     if args.overfit:
         continue
-    log('EPOCH %s COMPLETE. EVALUATING...' % epoch, level = 'info')
+    logging.info('EPOCH %s COMPLETE. EVALUATING...' % epoch)
 
     # evaluate on dev set, update scheduler
     start = time.time()    
@@ -295,14 +289,14 @@ for epoch in range(start_epoch, config['training']['epochs']):
         [writer.add_scalar(f'eval/edit_distance_target_style_{(i + 1) % n_styles}', e, epoch) for i, e in enumerate(edit_distances)]
         [writer.add_scalar(f'eval/bleu_target_style_{(i + 1) % n_styles}', c, epoch) for i, c in enumerate(bleus)]
         writer.add_scalar('eval/bleu', mean_bleu, epoch)
-        log('BLEU: %s. TIME: %.2fs CHECKPOINTING...' % (mean_bleu, (time.time() - start)), level = 'info')
+        logging.info('BLEU: %s. TIME: %.2fs CHECKPOINTING...' % (mean_bleu, (time.time() - start)))
     else:
-        log('DEV LOSS: %s. TIME: %.2fs CHECKPOINTING...' % (dev_loss, (time.time() - start)), level = 'info')
+        logging.info('DEV LOSS: %s. TIME: %.2fs CHECKPOINTING...' % (dev_loss, (time.time() - start)))
     cur_metric = dev_loss
    
     #early_stopping(dev_loss)
     avg_loss = np.mean(epoch_loss)
     epoch_loss = []
-    log(f'Epoch took {time.time() - epoch_start_time} seconds', level='info')
+    logging.info(f'Epoch took {time.time() - epoch_start_time} seconds')
 writer.close()
 
