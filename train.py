@@ -21,6 +21,12 @@ import src.models as models
 import src.discriminators as discriminators
 import src.callbacks as callbacks
 import random
+from utils.log_func import get_log_func
+
+log_level = os.getenv("LOG_LEVEL", "WARNING")
+root_logger = logging.getLogger()
+root_logger.setLevel(log_level)
+log = get_log_func(__name__)
 
 # maximum batch sizes from experimentation on GPU
 MAX_BS = 64
@@ -54,18 +60,18 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename='%s/train_log' % working_dir,
 )
-console = logging.StreamHandler()
+#console = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-console.setFormatter(formatter)
+#console.setFormatter(formatter)
 filelog = logging.FileHandler('%s/train_log' % working_dir)
 filelog.setFormatter(formatter)
 logger = logging.getLogger('')
-logger.addHandler(console)
+#logger.addHandler(console)
 logger.addHandler(filelog)
-logger.setLevel(logging.INFO)
+#logger.setLevel(logging.INFO)
 
 # read data
-logging.info('Reading data ...')
+log('Reading data ...', level = 'info')
 n_styles = len(config['data']['train'])
 train_data = data.read_nmt_data(
    n_styles = n_styles,
@@ -78,7 +84,7 @@ test_data = data.read_nmt_data(
     train_data=train_data,
     cache_dir=vocab_dir
 )
-logging.info('...done!')
+log('...done!', level='info')
 
 # grab important params from config
 batch_size = config['data']['batch_size']
@@ -100,7 +106,7 @@ model = models.FusedSeqModel(
    config=config,
 )
 trainable, untrainable = model.count_params()
-logging.info(f'MODEL HAS {trainable} trainable params and {untrainable} untrainable params')
+log(f'MODEL HAS {trainable} trainable params and {untrainable} untrainable params', level='info')
 model, start_epoch = models.attempt_load_model(
     model=model,
     checkpoint_dir=working_dir)
@@ -202,7 +208,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         # update discriminator optimizer and schedulers
         if s_discriminators is not None:
             bp_t = time.time()
-            [evaluation.backpropagation_step(l, opt, batch_idx, sched, scheduler_name, update_frequency, 
+            [evaluation.backpropagation_step(l, opt, sched, scheduler_name, batch_idx, update_frequency, 
                 retain_graph=True) for l, opt, sched in zip(s_losses, d_optimizers, d_schedulers)]
             logging.debug(f'backpropagation through discriminators took: {time.time() - bp_t} seconds')
     
@@ -217,7 +223,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
                     loss_discrim = []
     
         bp_t = time.time()
-        evaluation.backpropagation_step(train_loss, optimizer, batch_idx, update_frequency, retain_graph = False)
+        evaluation.backpropagation_step(train_loss, optimizer, scheduler, scheduler_name, batch_idx, update_frequency, retain_graph = False)
         logging.debug(f'backpropagation through S2S took: {time.time() - bp_t} seconds')
         
         # write information to tensorboard
@@ -235,7 +241,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
             info = (epoch, num_batches - idx / sample_size, num_batches, wps, avg_loss, cur_metric)
             writer.add_scalar('stats/WPS', wps, STEP)
             writer.add_scalar('stats/loss', avg_loss, STEP)
-            logging.info('EPOCH: %s ITER: %s/%s WPS: %.2f LOSS: %.4f METRIC: %.4f' % info)
+            log('EPOCH: %s ITER: %s/%s WPS: %.2f LOSS: %.4f METRIC: %.4f' % info, level = 'info')
             start_since_last_report = time.time()
             words_since_last_report = 0
             losses_since_last_report = []
@@ -245,7 +251,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
     if args.overfit:
         continue
-    logging.info('EPOCH %s COMPLETE. EVALUATING...' % epoch)
+    log('EPOCH %s COMPLETE. EVALUATING...' % epoch, level = 'info')
 
     # evaluate on dev set, update scheduler
     start = time.time()    
@@ -270,11 +276,11 @@ for epoch in range(start_epoch, config['training']['epochs']):
         
         num_samples = config['training']['num_samples']
         with torch.no_grad():
-            cur_metrics, edit_distances, inputs, preds, golds, auxs = evaluation.inference_metrics(
+            bleus, edit_distances, inputs, preds, golds, auxs = evaluation.inference_metrics(
                 model, s_discriminators, test_data, sample_size, num_samples, config)
         
         # metrics averaged over metric for each style
-        cur_metric = np.mean(cur_metrics)
+        mean_bleu = np.mean(bleus)
         edit_distance = np.mean(edit_distances)
         with open(working_dir + '/auxs.%s' % epoch, 'w') as f:
             f.write('\n'.join(auxs) + '\n')
@@ -287,15 +293,16 @@ for epoch in range(start_epoch, config['training']['epochs']):
 
         # write edit distance and bleu metrics separately for each style
         [writer.add_scalar(f'eval/edit_distance_target_style_{(i + 1) % n_styles}', e, epoch) for i, e in enumerate(edit_distances)]
-        [writer.add_scalar(f'eval/bleu_target_style_{(i + 1) % n_styles}', c, epoch) for i, c in enumerate(cur_metrics)]
-        writer.add_scalar('eval/bleu', cur_metric, epoch)
+        [writer.add_scalar(f'eval/bleu_target_style_{(i + 1) % n_styles}', c, epoch) for i, c in enumerate(bleus)]
+        writer.add_scalar('eval/bleu', mean_bleu, epoch)
+        log('BLEU: %s. TIME: %.2fs CHECKPOINTING...' % (mean_bleu, (time.time() - start)), level = 'info')
     else:
-        cur_metric = dev_loss
+        log('DEV LOSS: %s. TIME: %.2fs CHECKPOINTING...' % (dev_loss, (time.time() - start)), level = 'info')
+    cur_metric = dev_loss
    
     #early_stopping(dev_loss)
-    logging.info('METRIC: %s. TIME: %.2fs CHECKPOINTING...' % (cur_metric, (time.time() - start)))
     avg_loss = np.mean(epoch_loss)
     epoch_loss = []
-    logging.info(f'Epoch took {time.time() - epoch_start_time} seconds')
+    log(f'Epoch took {time.time() - epoch_start_time} seconds', level='info')
 writer.close()
 
