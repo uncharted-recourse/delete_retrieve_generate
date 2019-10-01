@@ -45,7 +45,7 @@ def on_train_start(config):
     if not os.path.exists(config_path):
         with open(config_path, 'w') as f:
             json.dump(config, f)
-            
+
     return working_dir, vocab_dir, lm_dir    
 
 class EarlyStopping(object):
@@ -80,7 +80,7 @@ class EarlyStopping(object):
                     self.degrade_count += 1
                 else:
                     self.degrade_count = 0
-            if self.degrade_count > patience:
+            if self.degrade_count > self.patience:
                 sys.exit(f'Metric has degraded for {self.degrade_count} epochs, exiting training')
             self.prev_metric = cur_metric
 

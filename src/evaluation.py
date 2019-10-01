@@ -83,11 +83,14 @@ def update_training_index(cur_index, n_styles, batch_size):
         cur_index = 0
     return cur_index, train_sample_size
 
-def backpropagation_step(loss, optimizer, retain_graph = False):
-    """ perform one step of backpropagation"""
-    optimizer.zero_grad()
+def backpropagation_step(loss, optimizer, batch_idx, update_frequency = 1, retain_graph = False):
+    """ perform one step of backpropagation (supports accumulated gradients)"""
     loss.backward(retain_graph = retain_graph)
-    optimizer.step()
+
+    if (batch_idx + 1) % update_frequency == 0:
+        # every update_frequency batches update accumulated gradients
+        optimizer.zero_grad()
+        optimizer.step()
 
 def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model, weight_decay = 0):
     """ define optimmizer and scheduler according to learning rate"""

@@ -89,7 +89,7 @@ class ConvNet(nn.Module):
         
         # construct fully connected layer based on reduction dimensions
         reduce_factor = layers[0].pool_kernel_size ** len(layers) 
-        fc_in_dim = int(num_channels[-1] * (hidden_dim // reduce_factor))
+        fc_in_dim = int(num_channels[-1] * (dim // reduce_factor))
         self.fc = nn.Linear(fc_in_dim, num_classes)
  
     def forward(self, content):
@@ -131,7 +131,7 @@ def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, w
         num_channels = [100,200], 
         kernel_sizes = [5,5], 
         max_length = max_length_s,
-        hidden_dim = hidden_dim
+        dim = hidden_dim
         ) for _ in range(0, n_styles)]
 
     # trainable, untrainable = z_discriminator.count_params()
@@ -154,7 +154,7 @@ def define_discriminators(n_styles, max_length_s, hidden_dim, working_dir, lr, w
     # params = [z_discriminator.parameters()]
     # for s_discriminator in s_discriminators:
     #     params.append(s_discriminator.parameters())
-    
+
     d_optimizers, d_schedulers = [], []
     for discriminator in s_discriminators:
         optimizer, scheduler = evaluation.define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, discriminator, weight_decay)

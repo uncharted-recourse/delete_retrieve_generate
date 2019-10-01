@@ -22,6 +22,9 @@ import src.discriminators as discriminators
 import src.callbacks as callbacks
 import random
 
+# maximum batch sizes from experimentation on GPU
+MAX_BS = 64
+MAX_BS_DISCRIM = 4
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -121,8 +124,12 @@ if config['training']['discriminator_ratio'] > 0:
         config['training']['weight_decay'],
         config['training']['optimizer'], 
         scheduler_name)
+    update_frequency = batch_size // MAX_BS_DISCRIM
+    batch_size = MAX_BS_DISCRIM 
 else:
     s_discriminators = None
+    update_frequency = batch_size // MAX_BS
+    batch_size = MAX_BS
 
 # main training loop
 
@@ -195,7 +202,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
         # update discriminator optimizer and schedulers
         if s_discriminators is not None:
             bp_t = time.time()
-            [evaluation.backpropagation_step(l, opt, retain_graph=True) for l, opt in zip(s_losses, d_optimizers)]
+            [evaluation.backpropagation_step(l, opt, batch_idx, update_frequency, retain_graph=True) for l, opt in zip(s_losses, d_optimizers)]
             logging.debug(f'backpropagation through discriminators took: {time.time() - bp_t} seconds')
 
             if scheduler_name == 'cyclic' or scheduler_name == 'cosine':
@@ -212,7 +219,7 @@ for epoch in range(start_epoch, config['training']['epochs']):
                     loss_discrim = []
     
         bp_t = time.time()
-        evaluation.backpropagation_step(train_loss, optimizer, retain_graph = False)
+        evaluation.backpropagation_step(train_loss, optimizer, batch_idx, update_frequency, retain_graph = False)
         logging.debug(f'backpropagation through S2S took: {time.time() - bp_t} seconds')
         
         # write information to tensorboard

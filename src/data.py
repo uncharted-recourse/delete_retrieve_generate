@@ -537,18 +537,22 @@ def minibatch(datasets, style_ids, n_styles, idx, batch_size, max_len, model_typ
                 tgt_idx = random.randint(0, n_styles - 1)
                 while tgt_idx == i:
                     tgt_idx = random.randint(0, n_styles - 1)
+                out_dataset_ordering.append(tgt_idx)
             elif is_adv: # adversarial: randomly sample intermediate style from list of style_ids
-                tgt_idx = random.choice(style_ids)
-                while tgt_idx == i or tgt_idx in out_dataset_ordering:
-                    tgt_idx = random.choice(style_ids)
+                out_dataset_ordering = style_ids.copy()
+                while True:
+                    random.shuffle(out_dataset_ordering)
+                    if sum([True if i == j else False for i, j in zip(style_ids, out_dataset_ordering)]) >= 1:
+                        break
             elif is_test: # test translate to parallel corpus style for accurate evaluation
                 if i == 0 or i == 2:
                     tgt_idx = i+1
                 else:
                     tgt_idx = i-1
+                out_dataset_ordering.append(tgt_idx)
             else: # train, sample style
                 tgt_idx = i
-            out_dataset_ordering.append(tgt_idx)
+                out_dataset_ordering.append(tgt_idx)
     else:
         # handle special BT case opposite direction
         out_dataset_ordering = style_ids
