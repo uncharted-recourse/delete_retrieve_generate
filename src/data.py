@@ -125,20 +125,7 @@ class SalienceCalculator(object):
 def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.1, ngram_range = 5, permutation = 0):
     """ extract attributes from sequnce, either according to noising, word attr, or ngram attr strategy"""
 
-    # do noisy masking according to Lample et. al (2017)
-    if noise == 'dropout':
-        content = []
-        attribute_markers = []
-        # word dropout with probability
-        for tok in line:
-            if np.random.random_sample() > dropout_prob:
-                content.append(tok)
-            else:
-                # TODO: maybe just dropout
-                # we set non content tokens as attribute tokens, allows replacement in Delete + Retrieve
-                attribute_markers.append(tok)
-
-    elif noise == 'ngram_attributes':
+    if noise == 'ngram_attributes':
         # generate all ngrams for the sentence
         grams = []
         for i in range(1, ngram_range):
@@ -181,7 +168,13 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
     else:
         raise Exception('Noising strategy must be one of "dropout", "word_attributes", or "ngram_attributes"')
     
-    # permutation with parameter k for content words not dropped
+    # always do noisy masking according to Lample et. al (2017) 
+    # word dropout with probability
+    for tok in content:
+        if np.random.random_sample() < dropout_prob:
+            content.remove(tok)
+
+     # permutation with parameter k for content words not dropped
     q = np.random.uniform(0, permutation + 1, len(content))
     q = [q_i + i for q_i, i in zip(q, range(len(q)))]
     content = [tok for _, tok in sorted(zip(q,content))]
@@ -326,6 +319,8 @@ def read_nmt_data(n_styles, config, train_data=None, cache_dir = None):
     # 2. Extract attributes:
     # data is a list with content and attribute information stored for each style corpus
         # each line in each style corpus has been segmented into content and attribute information according to pre-processing
+    # TODO: remove marked attributes from all styles (handle None dropout case)
+    #all_attrs = [attr for attr_list in attrs for attr in attr_list]
     data = [list(zip(
         *[extract_attributes(line, attrs[style_idx], config['data']['noise'], config['data']['dropout_prob'],
             config['data']['ngram_range'], config['data']['permutation']) for line in lines]
@@ -497,6 +492,7 @@ def back_translation_minibatch(datasets, style_ids, n_styles, config, batch_idx,
         batch_len = len(input_content[0]) // len(out_dataset_ordering)
         start_idx = attr_id_orig * batch_len
         stop_idx = (attr_id_orig + 1) * batch_len
+        # should we extract all styles or just intermediate for BT approach??
         attribute_vocab = None if attrs == None else attrs[attr_id_middle]
         _, content, _ = list(zip(
             *[extract_attributes(line.split(), attribute_vocab, config['data']['noise'], config['data']['dropout_prob'],

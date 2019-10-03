@@ -16,10 +16,14 @@ import random
 import time
 from modules.expectedMultiBleu import bleu as expected_bleu
 from itertools import permutations
+import pickle
 
 import os
 import logging
 from utils.log_func import get_log_func
+from flask import Flask
+app = Flask(__name__)
+app.logger.debug('debug')
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -90,8 +94,8 @@ def backpropagation_step(loss, optimizer, scheduler, scheduler_name, batch_idx,
 
     if (batch_idx + 1) % update_frequency == 0:
         # every update_frequency batches update accumulated gradients
-        optimizer.zero_grad()
         optimizer.step()
+        optimizer.zero_grad()
         if scheduler_name == 'cyclic' or scheduler_name == 'cosine':
             scheduler.step()
 
@@ -334,12 +338,19 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
         next_preds = Variable(torch.from_numpy(decoder_argmax))
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
         next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] for cur, prev in zip(decoder_argmax, prev_mask)]
-        next_mask = torch.BoolTensor(next_mask)
+        next_mask_unrolled = [val for val_list in next_mask for val in val_list]
         if CUDA:
             next_preds = next_preds.cuda()
-            next_mask = next_mask.cuda()
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
-        tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
+
+        # check for early stopping to speed up decoding
+        if sum(next_mask_unrolled) == len(next_mask_unrolled):
+            return tgt_input
+        else:
+            next_mask = torch.BoolTensor(next_mask)
+            if CUDA:
+                next_mask = next_mask.cuda()
+            tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
     return tgt_input
 
 def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
@@ -355,9 +366,9 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
 
     # unsort
     if sort:
-         return data.unsort(tok_seqs, indices)
+        return data.unsort(tok_seqs, indices)
     else:
-         return tok_seqs
+        return tok_seqs
 
 def generate_sequences(tokenizer, model, config, start_id, stop_id, input_content, input_aux):
     "generate sequences of output by sampling from token distribution according to decoding strategy"
@@ -515,7 +526,8 @@ def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
             d_means = None
     return np.mean(losses), d_means
 
-def predict_text(input_content, tokenizer, style_ids, config, model, train_data = None):
+def predict_text(input_content, tokenizer, style_ids, config, model, k = 5, temperature = 1.0, 
+        number_preds = 1, train_data = None):
     """ translate input sequence (not in train / test corpora) to another style (s). 
         train_data only necessary in delete and retrieve framework to create tfidf similarity
         between input_text and training corpii to extract appropriate attributes for embedding. 
@@ -524,29 +536,31 @@ def predict_text(input_content, tokenizer, style_ids, config, model, train_data 
     start_time = time.time()
 
     # remove attribute tokens from input according if they have been marked
-    # (if word / ngram attributes pre-calculated they will be cached and copied to image)
+    # (if word / ngram attributes pre-calculated they need to be cached and copied to image)
     input_content = input_content.split()
     if config['data']['noise'] == 'word_attributes' or config['data']['noise'] == 'ngram_attributes':
         attr_path = os.path.join("checkpoints", config['data']['vocab_dir'], 'style_vocabs.pkl')
         attrs = pickle.load(open(attr_path, "rb"))
 
-        # iteratively remove each style's attributes
-        for attr in attrs:
-            _, input_content, _ = data.extract_attributes(input_content, attr, config['data']['noise'], 
-                config['data']['dropout_prob'], config['data']['ngram_range'], config['data']['permutation'])
-        
+        # remove attributes from all styles
+        all_attrs = [attr for attr_list in attrs for attr in attr_list]
+        # permutation and dropout_prob should also be turned off for deployment inference
+        _, input_content, _ = data.extract_attributes(input_content, all_attrs, config['data']['noise'], 
+            0, config['data']['ngram_range'], 0)
+    
+    if config['model']['model_type'] == 'delete_retrieve':
         # get attribute examples by measuring distance to train_data corpii with tfidf
         train_data = [train_data[style_id] for style_id in style_ids]
         dist_measurers = [data.CorpusSearcher(
             query_corpus=[' '.join(x) for x in input_content],
-            key_corpus=[' '.join(x) for x in train_content],
-            value_corpus=[' '.join(x) for x in train_attributes],
+            key_corpus=[' '.join(x) for x in train_dict['content']],
+            value_corpus=[' '.join(x) for x in train_dict['attribute']],
             vectorizer=data.TfidfVectorizer(),
             make_binary=False)
-            for (_, train_content, train_attributes) in train_data]
+            for train_dict in train_data]
 
         # last two args are sample rate (always 1.0) and key_idx (always 0)
-        input_attributes = [data.sample_replace([input_content], tokenizer, dist_m, 1.0, 0) for dist_m in dist_measurers]
+        input_attributes = [data.sample_replace([input_content], tokenizer, [dist_m], 1.0, 0) for dist_m in dist_measurers]
 
         # tokenize attributes
         input_attr = torch.LongTensor([
@@ -568,14 +582,28 @@ def predict_text(input_content, tokenizer, style_ids, config, model, train_data 
     content_length = [input_content.shape[1]]
     content_mask = torch.BoolTensor([([False] * content_length[0])])
 
+    # copy # of predictions times for batch decoding
+    input_attributes = input_attributes.repeat(number_preds, 1)
+    input_content = input_content.repeat(number_preds, 1)
+    content_mask = content_mask.repeat(number_preds, 1)
+    content_length = content_length * number_preds
+    if attr_length is not None:
+        attr_mask = attr_mask.repeat(number_preds, 1)
+        attr_length = attr_length * number_preds
+
     # decode according to decoding strategy
     content = (input_content, None, content_length, content_mask, None)
     attributes = (input_attributes, None, attr_length, attr_mask, None)
+    t0 = time.time()
+
+    # update k and temperature with user inputs, generate sequence
+    config['model']['k'] = k
+    config['model']['temperature'] = temperature
     output = generate_sequences(tokenizer, model, config, tokenizer.bos_token_id, tokenizer.eos_token_id, content, attributes)
 
     # convert tokens to text
-    preds = ' '.join(ids_to_toks(output, tokenizer, sort=False))
-    log(f'generating style from input text took: {time.time() - start_time} seconds', level='debug')
+    preds = ids_to_toks(output, tokenizer, sort=False)
+    log(preds, level='debug')
     return preds
 
 def sample_softmax(logits, temperature=1.0, num_samples=1):
@@ -653,13 +681,22 @@ def decode_top_k(
         next_preds = torch.LongTensor(sampled_indices)
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
         next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] for cur, prev in zip(sampled_indices, prev_mask)]
-        next_mask = torch.BoolTensor(next_mask)
+       next_mask_unrolled = [val for val_list in next_mask for val in val_list]
         if CUDA:
             next_preds = next_preds.cuda()
-            next_mask = next_mask.cuda()
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
-        tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
+
+        # check for early stopping to speed up decoding
+        if sum(next_mask_unrolled) == len(next_mask_unrolled):
+            return tgt_input
+        else:
+            next_mask = torch.BoolTensor(next_mask)
+            if CUDA:
+                next_mask = next_mask.cuda()
+            tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
     return tgt_input
+
+    
     
 class Beam(object):
     """ Beam object for beam search decoding"""

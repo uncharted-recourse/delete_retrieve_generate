@@ -3,6 +3,7 @@ import glob
 import numpy as np
 import os
 import logging
+import time
 from utils.log_func import get_log_func
 
 import torch
@@ -15,11 +16,15 @@ import src.discriminators as discriminators
 
 from src.cuda import CUDA
 from src import data
+from flask import Flask
+app = Flask(__name__)
+app.logger.debug('debug')
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
 root_logger.setLevel(log_level)
 log = get_log_func(__name__)
+
 
 def get_latest_ckpt(ckpt_dir, model_type = 'model'):
     """ get latest model checkpoint from ckpt_dir"""    
@@ -68,9 +73,6 @@ def initialize_inference_model(config, input_lines = None, map_location = 'cpu')
         pad_id_tgt=tokenizer.pad_token_id,
         config=config
     )
-    for param in model.parameters():
-       param.requires_grad = False
-    model.eval()
 
     # attempt to load model from working_dir in config
     model, _ = attempt_load_model(
@@ -78,6 +80,9 @@ def initialize_inference_model(config, input_lines = None, map_location = 'cpu')
         checkpoint_dir=f"checkpoints/{config['data']['working_dir']}",
         map_location=torch.device(map_location)
     )
+    for param in model.parameters():
+       param.requires_grad = False
+    model.eval()
 
     # if delete + retrieve paradigm, produce training data dictionaries for attribute
     # retrieval at inference time
@@ -234,7 +239,7 @@ class SeqModel(nn.Module):
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
         src_emb = self.src_embedding(input_src)
-
+        t0 = time.time()
         if self.options['encoder'] == 'lstm':
             src_outputs, (src_h_t, src_c_t) = self.encoder(src_emb, srclens)
             if self.options['bidirectional']:
