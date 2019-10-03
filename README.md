@@ -13,12 +13,12 @@ Users can input the number of translations, the target style(s), and the decodin
 This repository was originally forked from rpryzant@stanford.edu's implementation of the DeleteOnly and DeleteAndRetrieve models from [Delete, Retrieve, Generate:
 A Simple Approach to Sentiment and Style Transfer](https://arxiv.org/pdf/1804.06437.pdf). It has also added the following components to the source code:
 
-* optional backtranslation, from https://research.fb.com/wp-content/uploads/2019/04/Multiple-Attribute-Text-Rewriting.pdf?
+* optional backtranslation, from https://research.fb.com/wp-content/uploads/2019/04/Multiple-Attribute-Text-Rewriting.pdf
 * TransformerXL encoder and decoder with relative position attention
 * simple fusion with GPT or GPT2 pre-trained language models
 * optional adversarial training loop with CNNs as the discriminators, from https://arxiv.org/pdf/1705.09655.pdf (primarily) and https://arxiv.org/abs/1703.00955
     * specifically, the discriminators differentiate between unrolled hidden states of a teacher-forced sequence to style_{i} and an unforced sequence to style_{i}, generated with a soft probability distribution over tokens
-* supports training on an arbitrary number of styles and inference to (optionally) multiple styles, from https://research.fb.com/wp-content/uploads/2019/04/Multiple-Attribute-Text-Rewriting.pdf?)
+* supports training on an arbitrary number of styles and inference to (optionally) multiple styles, from https://research.fb.com/wp-content/uploads/2019/04/Multiple-Attribute-Text-Rewriting.pdf)
 * supports three noising methods on input sequences: random dropout, word attribute selection, and ngram attribute selection 
 * supports greedy and top k decoding
 * supports two loss functions: cross entropy and a differentiable lower bound on the expected bleu score
