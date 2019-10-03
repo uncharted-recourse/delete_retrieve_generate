@@ -19,25 +19,31 @@
             <!-- Enter text to style. -->
             <div class="form-group">
               <label for="text-to-style"><strong>Text to be styled:</strong></label>
-              <textarea class="form-control" id="text-to-style" rows="5"></textarea>
+              <textarea class="form-control" id="text-to-style" rows="6"></textarea>
             </div>
             <!-- Select output styles. -->
             <div class="form-group">
               <fieldset>
-                Informal: <input type="checkbox" id="informal">
-                Formal: <input type="checkbox" id="formal">
+                Informal: <input type="checkbox" id="informal"> &nbsp&nbsp
+                Formal: <input type="checkbox" id="formal"> &nbsp&nbsp
+                Humorous: <input type="checkbox" id="humorous"> &nbsp&nbsp
+                Romantic: <input type="checkbox" id="romantic">
               </fieldset>
             </div>
             <button type="submit" class="btn btn-primary mb-2" id="style">Style!</button></br>
-          </form>
         </div>
         <div class="col">
             <!-- Styled text rendered here. -->
             <form>
               <div class="form-group" id="style-transfer-text-response">
                 <label for="style-transfer-result"><strong>Styled text:</strong></label>
-                <textarea readonly class="form-control" id="style-transfer-result" rows="5"></textarea>
+                <textarea readonly class="form-control" id="style-transfer-result" rows="6"></textarea>
               </div>
+            </form>
+            <form>
+              Number of translations: <input type="number" id="quantity" min="1" max="5" value="5"> &nbsp&nbsp&nbsp
+              K: <input type="number" id="k" min="1" max="10" value="5"> &nbsp&nbsp&nbsp
+              Temp: <input type="number" id="temperature" min="0.01" max="20" step="0.01" value="1.0">
             </form>
         </div> 
       </div>

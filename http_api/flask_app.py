@@ -24,14 +24,14 @@ app.logger.debug('debug')
 STYLES = {
     "informal": 0,
     "formal": 1,
-    # "humorous": 2,
-    # "romantic": 3
+    "humorous": 2,
+    "romantic": 3
 }
 
 # pre-load model with n styles
 start_time = time.time()
 log("loading model", level="debug")
-model_fname_prefix = 'transformer_lm'
+model_fname_prefix = 'big_model'
 model_config_fpath = f"checkpoints/{model_fname_prefix}/config.json"
 model_config = read_json(model_config_fpath)
 model, tokenizer, train_data = initialize_inference_model(config=model_config)
@@ -50,11 +50,29 @@ def req_style_transfer():
             data = request.get_json()
             styles = data["styles"]
             text = data["input_text"]
+            if data['quantity'] == '':
+                quantity = 1
+            else: 
+                quantity = int(data["quantity"])
+            if data['k'] == '':
+                k = 5
+            else:
+                k = int(data['k'])
+            if data['temperature'] == '':
+                temperature = 1.0
+            else:
+                temperature = float(data['temperature'])
         else:
             styles = request.values.getlist("styles")
             text = request.values.get("input_text")
-        log(f'styles: {styles}', level='debug')
+            quantity = int(request.values.get("quantity", 1))
+            k = int(request.values.get("k", 5))
+            temperature = float(request.values.get("temperature", 5.0))
+
+        log(f'styles: {styles}, quantity: {quantity}, k: {k}, temperature: {temperature}', level='debug')
         style_ids = []
+        if not styles:
+            raise Exception("no input styles found")
         for style in styles:
             if style not in STYLES.keys():
                 raise Exception(f"style {style} not supported")
@@ -66,16 +84,19 @@ def req_style_transfer():
 
         log("predicting text", level="debug")
         start_time = time.time()
-        pred_text = predict_text(text, 
+        pred_texts = predict_text(text, 
             tokenizer, 
             style_ids,
             model_config,
             model,
+            k = k, 
+            temperature=temperature,
+            number_preds=quantity,
             train_data=train_data,
         )
         log(f"prediction took {time.time()-start_time} seconds", level="debug")
 
-        out = {"output_text": pred_text, "styles": styles}
+        out = {"output_texts": pred_texts, "styles": styles, "quantity": quantity}
         out.update(request.values)
         return jsonify(out)
 

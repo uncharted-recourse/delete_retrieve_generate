@@ -4,7 +4,10 @@ $(function() {
     $("#style").on("click", function(e) {
       e.preventDefault();
       var translateVal = document.getElementById("text-to-style").value;
-      var styles = ['informal', 'formal'];
+      var quantity = document.getElementById("quantity").value;
+      var k = document.getElementById("k").value;
+      var temperature = document.getElementById("temperature").value;
+      var styles = ['informal', 'formal', 'humorous', 'romantic'];
       var stylesChecked = []
 
       for (var i = 0; i < styles.length; i++) {
@@ -17,7 +20,8 @@ $(function() {
       try { (stylesChecked.length > 0);}
       catch(err) { document.getElementById("style-transfer-result").textContent = err.message;}
       
-      var translateRequest = { 'input_text': translateVal, 'styles': stylesChecked };
+      var translateRequest = { 'input_text': translateVal, 'styles': stylesChecked, 'quantity': quantity, 
+        'k': k, 'temperature': temperature};
       if (translateVal !== "") {
         $.ajax({
           url: '/style-transfer',
@@ -28,7 +32,7 @@ $(function() {
           dataType: 'json',
           data: JSON.stringify(translateRequest),
           success: function(data) {
-            document.getElementById("style-transfer-result").textContent = data["output_text"];
+            document.getElementById("style-transfer-result").textContent = data["output_texts"].join("\n");
           },
           error: function(err) {
             document.getElementById("style-transfer-result").textContent = err.message;
