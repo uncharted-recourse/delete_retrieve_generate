@@ -9,8 +9,9 @@ WORKDIR $HOME
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 # update os package manager, then install prerequisite packages
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git
+RUN apt-get update
+#&& apt-get install -y --no-install-recommends \
+#    git
 
 # install base requirements
 COPY requirements.txt $HOME/
@@ -20,15 +21,8 @@ RUN pip install -r requirements.txt
 COPY http_api/requirements.txt $HOME/http_api/requirements.txt
 RUN pip install -r http_api/requirements.txt
 
-# install pytorch_transformers from source
-RUN git clone https://github.com/huggingface/pytorch-transformers
-RUN pip install pytorch-transformers/.
-
 # copy model, config, tokenizer vocab files, language model files
-COPY checkpoints/transformer_lm/model.5.ckpt $HOME/checkpoints/transformer_lm/model.5.ckpt
-COPY checkpoints/transformer_lm/config.json $HOME/checkpoints/transformer_lm/config.json
-COPY checkpoints/noise_vocab/ $HOME/checkpoints/noise_vocab
-COPY checkpoints/gpt_model/ $HOME/gpt_model_mask
+COPY checkpoints/gpt_model/ $HOME/gpt_model
 
 # copy everything else (excluding stuff specified in .dockerignore)
 COPY . $HOME/
