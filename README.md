@@ -4,7 +4,7 @@ This repository implements an auto-encoder approach to style transfer dubbed **V
 
 The **flask.dockerfile** in the main repository builds a docker image that launches a flask app with a translation-like interface. An example screenshot is shown below:
 
-![api_example](https://github.com/NewKnowledge/delete_retrieve_generate/tree/master/screenshots/api_example.png)
+![api_example](https://github.com/NewKnowledge/delete_retrieve_generate/blob/jg/discriminator/screenshots/api_example.png)
 
 Users can input the number of translations, the target style(s), and the decoding parameters k and temperature and observe how these choices affect the styled tranlsations!
 
