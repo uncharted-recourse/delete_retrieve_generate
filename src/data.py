@@ -165,6 +165,11 @@ def extract_attributes(line, attribute_vocab, noise='dropout', dropout_prob = 0.
                 attribute_markers.append(tok)
             else:
                 content.append(tok)
+
+    elif noise == 'dropout':
+        content = line
+        attribute_markers = None
+    
     else:
         raise Exception('Noising strategy must be one of "dropout", "word_attributes", or "ngram_attributes"')
     
