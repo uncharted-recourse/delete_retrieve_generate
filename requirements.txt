@@ -10,4 +10,6 @@ tensorboard
 torch==1.2.0
 torchvision==0.3.0
 nltk
-pytorch_transformers
+transformers==2.0.0
+spacy
+ftfy

@@ -1,11 +1,11 @@
 {
   "training": {
     "optimizer": "adam",
-    "scheduler": "plateau",
+    "scheduler": "cyclic",
     "learning_rate": 0.0003,
     "discriminator_learning_rate": 0.0003,
     "max_norm": 3.0,
-    "epochs": 11,
+    "epochs": 25,
     "batches_per_report": 200,
     "batches_per_sampling": 500,
     "random_seed": 1,
@@ -23,7 +23,7 @@
     "dropout_prob": 0.2,
     "ngram_range": 3,
     "salience_threshold": 5,
-    "batch_size": 32,
+    "batch_size": 128,
     "max_len": 50,
     "permutation": 3,
     "working_dir": "testing",
@@ -32,19 +32,20 @@
   },
     "model": {
         "model_type": "delete",
-        "emb_dim": 128,
-        "encoder": "lstm",
+        "emb_dim": 512,
+        "encoder": "transformer",
         "bidirectional": true,
-        "decoder": "lstm",
+        "decoder": "transformer",
         "attention": true,
-        "src_hidden_dim": 512,
-        "src_layers": 1,
-        "tgt_hidden_dim": 512,
-        "tgt_layers": 1,
+        "src_hidden_dim": 1024,
+        "src_layers": 2,
+        "tgt_hidden_dim": 1024,
+        "tgt_layers": 2,
+        "tie_weights": false,
         "decode": "top_k",
         "beam_width": 5,
-        "k": 3,
+        "k": 5,
         "temperature": 1.0,
-        "dropout": 0.2
+        "dropout": 0.5
     }
 }

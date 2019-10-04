@@ -3,6 +3,7 @@ import glob
 import numpy as np
 import os
 import logging
+import time
 from utils.log_func import get_log_func
 
 import torch
@@ -15,11 +16,15 @@ import src.discriminators as discriminators
 
 from src.cuda import CUDA
 from src import data
+from flask import Flask
+app = Flask(__name__)
+app.logger.debug('debug')
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
 root_logger.setLevel(log_level)
 log = get_log_func(__name__)
+
 
 def get_latest_ckpt(ckpt_dir, model_type = 'model'):
     """ get latest model checkpoint from ckpt_dir"""    
@@ -41,7 +46,7 @@ def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None, map_loc
 
     assert checkpoint_dir or checkpoint_path
     if checkpoint_dir:
-        epoch, checkpoint_path = get_latest_ckpt(checkpoint_dir)
+        epoch, checkpoint_path = get_latest_ckpt(checkpoint_dir, model_type=model_type)
     else:
         epoch = int(checkpoint_path.split('.')[-2])
 
@@ -52,34 +57,42 @@ def attempt_load_model(model, checkpoint_dir=None, checkpoint_path=None, map_loc
     else:
         return model, 0
 
-def initialize_inference_model(config=None):
-    """ initialize inference model for deployment"""
+def initialize_inference_model(config, input_lines = None, map_location = 'cpu'):
+    """ initialize inference model for deployment """
 
-    # read target data from training corpus to estalish attribute vocabulary / similarity
-    log("reading training data from style corpus'", level="debug")
-    
-    src, tgt = data.read_nmt_data(
-        src=config['data']['src'], 
-        tgt=config['data']['tgt'],
-        config=config,
-        cache_dir=config['data']['vocab'],
-        train_src = True,
-        train_tgt=True
-    )
+    # instantiate tokenizer (cached files copied to image)
+    tokenizer = data.get_tokenizer(encoder = config['data']['tokenizer'], 
+        cache_dir=os.path.join("checkpoints", config['data']['vocab_dir']))
 
-    log("initializing model", level="debug")
-    padding_id = data.get_padding_id(src['tokenizer'])
-    model = SeqModel(
-        src_vocab_size=len(src['tokenizer']),
-        tgt_vocab_size=len(src['tokenizer']),
-        pad_id_src=padding_id,
-        pad_id_tgt=padding_id,
+    # init model
+    vocab_size = len(tokenizer)
+    model = FusedSeqModel(
+        src_vocab_size=vocab_size,
+        tgt_vocab_size=vocab_size,
+        pad_id_src=tokenizer.pad_token_id,
+        pad_id_tgt=tokenizer.pad_token_id,
         config=config
     )
-    if CUDA:
-        model = model.cuda()
 
-    return model, src, tgt
+    # attempt to load model from working_dir in config
+    model, _ = attempt_load_model(
+        model=model,
+        checkpoint_dir=f"checkpoints/{config['data']['working_dir']}",
+        map_location=torch.device(map_location)
+    )
+    for param in model.parameters():
+       param.requires_grad = False
+    model.eval()
+
+    # if delete + retrieve paradigm, produce training data dictionaries for attribute
+    # retrieval at inference time
+    if input_lines is not None:
+        train_data = data.read_nmt_data(input_lines, len(input_lines), config, train_data=None,
+            cache_dir = config['data']['vocab_dir'])
+    else:
+        train_data = None
+
+    return model, tokenizer, train_data
 
 class SeqModel(nn.Module):
     def __init__(
@@ -127,11 +140,12 @@ class SeqModel(nn.Module):
                 self.options['tgt_hidden_dim'])
         elif self.options['encoder'] == 'transformer':
             # for now take default values of n_head
-            self.encoder = encoders.TransformerEncoder(
+            self.encoder = encoders.TransformerXLEncoder(
                 self.options['emb_dim'],
+                self.options['src_layers'],
                 dim_ff=self.options['src_hidden_dim'],
                 dropout=self.options['dropout'],
-                num_layers=self.options['src_layers']
+                clamp_len=self.config['data']['max_len']
             )
             ctx_bridge_in = self.options['emb_dim']
         else:
@@ -140,13 +154,9 @@ class SeqModel(nn.Module):
         # # # # # #  # # # # # #  # # # # #  NEW STUFF FROM STD SEQ2SEQ
         if self.model_type == 'delete':
             self.attribute_embedding = nn.Embedding(
-                # TODO change num to num styles supported
                 num_embeddings=len(config['data']['test']), 
                 embedding_dim=self.options['emb_dim'])
-            if self.options['encoder'] == 'lstm':
-                attr_size = self.options['emb_dim']
-            elif self.options['encoder'] == 'transformer':
-                attr_size = 0
+            attr_size = self.options['emb_dim']
 
         elif self.model_type == 'delete_retrieve':
             if self.options['encoder'] == 'lstm':
@@ -160,11 +170,12 @@ class SeqModel(nn.Module):
                 attr_size = self.options['src_hidden_dim']
             elif self.options['encoder'] == 'transformer':
                 # for now take default values of n_head
-                self.attribute_encoder = encoders.TransformerEncoder(
+                self.attribute_encoder = encoders.TransformerXLEncoder(
                     self.options['emb_dim'],
+                    self.options['src_layers'],
                     dim_ff=self.options['src_hidden_dim'],
                     dropout=self.options['dropout'],
-                    num_layers=self.options['src_layers']
+                    clamp_len=self.config['data']['max_len'],
                 )
                 attr_size = self.options['emb_dim']
 
@@ -179,17 +190,21 @@ class SeqModel(nn.Module):
             self.decoder = decoders.StackedAttentionLSTM(config=config)
             bridge_out = self.options['tgt_hidden_dim']
         elif self.options['decoder'] == 'transformer':
-            self.decoder = decoders.TransformerDecoder(
+            self.decoder = decoders.TransformerXLDecoder(
                 self.options['emb_dim'],
-                dim_ff=self.options['src_hidden_dim'],
+                self.options['tgt_layers'],
+                dim_ff=self.options['tgt_hidden_dim'],
                 dropout=self.options['dropout'],
-                num_layers=self.options['tgt_layers']
+                clamp_len=self.config['data']['max_len'],
             )
             bridge_out = self.options['emb_dim']
         else:
             raise NotImplementedError('unknown decoder type')
-
-        self.ctx_bridge = nn.Linear(ctx_bridge_in, bridge_out)
+        
+        if self.options['encoder'] == 'lstm':
+            self.ctx_bridge = nn.Linear(ctx_bridge_in, bridge_out)
+        elif self.options['encoder'] == 'transformer':
+            self.ctx_bridge = nn.Linear(ctx_bridge_in + attr_size, bridge_out)
         self.c_bridge = nn.Linear(attr_size + ctx_bridge_in, bridge_out)
         self.h_bridge = nn.Linear(attr_size + ctx_bridge_in, bridge_out)
 
@@ -199,9 +214,22 @@ class SeqModel(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
 
         self.init_weights()
+        if self.options['tie_weights']:
+            self.tie_weights(self.output_projection, self.tgt_embedding)
+
+    def tie_weights(self, first_module, second_module):
+        """Tie the input and output embeddings"""
+        first_module.weight = second_module.weight
+        if hasattr(first_module, 'bias') and first_module.bias is not None:
+            first_module.bias.data = torch.nn.functional.pad(
+                first_module.bias.data,
+                (0, first_module.weight.shape[0] - first_module.bias.shape[0]),
+                'constant',
+                0
+            )
 
     def init_weights(self):
-        """Initialize weights."""
+        """Initialize weights.""" 
         initrange = 0.1
         self.src_embedding.weight.data.uniform_(-initrange, initrange)
         self.tgt_embedding.weight.data.uniform_(-initrange, initrange)
@@ -211,7 +239,7 @@ class SeqModel(nn.Module):
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
         src_emb = self.src_embedding(input_src)
-
+        t0 = time.time()
         if self.options['encoder'] == 'lstm':
             src_outputs, (src_h_t, src_c_t) = self.encoder(src_emb, srclens)
             if self.options['bidirectional']:
@@ -233,29 +261,27 @@ class SeqModel(nn.Module):
 
         # attribute embedding can be average of different styles (indicator variables or
         # words) only utilized at inference time, not during training 
-
         if self.model_type == 'delete':
             a_hts = self.attribute_embedding(input_attr)
-            a_ht = torch.mean(torch.stack(a_hts, dim=1), dim=1) if a_hts.shape[1] > 1 else a_hts.squeeze(1)
+            a_ht = torch.mean(a_hts, dim=-2) if a_hts.shape[1] > 1 else a_hts.squeeze(1)
             if self.options['encoder'] == 'lstm':
                 c_t = torch.cat((c_t_encoder, a_ht), -1)
                 c_t = self.c_bridge(c_t)
                 h_t = torch.cat((h_t_encoder, a_ht), -1)
                 h_t = self.h_bridge(h_t)
             elif self.options['encoder'] == 'transformer':
-                a_ht = torch.unsqueeze(a_ht, 1)
-                src_outputs = torch.cat((a_ht, src_outputs_encoder), 1)
+                a_ht = torch.unsqueeze(a_ht, 1).expand_as(src_outputs_encoder)
+                src_outputs = torch.cat((a_ht, src_outputs_encoder), -1)
                 src_outputs = self.ctx_bridge(src_outputs)
-                a_mask = Variable(torch.BoolTensor([[False] for i in range(input_src.size(0))]))
-                if CUDA:
-                    a_mask = a_mask.cuda()
-                srcmask = torch.cat((a_mask, srcmask), dim = 1)
+                # a_mask = Variable(torch.BoolTensor([[False] for i in range(input_src.size(0))]))
+                # if CUDA:
+                #     a_mask = a_mask.cuda()
+                # srcmask = torch.cat((a_mask, srcmask), dim = 1)
         elif self.model_type == 'delete_retrieve':
-            attr_embs = [self.src_embedding(i_attr) for i_attr in input_attr]
-            attr_emb = torch.mean(torch.stack(attr_embs, dim=1), dim=1)
-
+            attr_embs = self.src_embedding(input_attr)
+            attr_emb = torch.mean(attr_embs, dim=-2) if attr_embs.shape[1] > 1 else attr_embs.squeeze(1)
             if self.options['encoder'] == 'lstm':
-                _, (a_ht, a_ct) = self.attribute_encoder(attr_emb, attrlens, attrmask)
+                _, (a_ht, a_ct) = self.attribute_encoder(attr_emb, attrlens)
                 if self.options['bidirectional']:
                     a_ht = torch.cat((a_ht[-1], a_ht[-2]), 1)
                     a_ct = torch.cat((a_ct[-1], a_ct[-2]), 1)
@@ -324,7 +350,8 @@ class FusedSeqModel(SeqModel):
     def __init__(
         self,
         *args,
-        join_method = 'add',
+        join_method = 'shallow',
+        init_weights = 'zero',
         finetune = False,
         **kwargs,
     ):
@@ -342,18 +369,42 @@ class FusedSeqModel(SeqModel):
 
         # join language model and s2s model
         self.join_method = join_method
-        if self.join_method == "add":
-            self.multp = nn.Parameter(torch.zeros(1))
-            #self.multp = nn.Parameter(torch.rand(1))
-        elif self.join_method == "gate":
+        if self.join_method == "shallow":
+            if init_weights == 'zero':
+                self.multp = nn.Parameter(torch.zeros(1))
+            elif init_weights == 'ones':
+                self.multp = nn.Parameter(torch.ones(1))
+            elif init_weights == 'rand':
+                self.multp = nn.Parameter(torch.rand(1))
+            else:
+                raise NotImplementedError('init weights must be one of "zero", "ones", or "rand"')
+
+        # deep fusion and cold fusion from https://arxiv.org/pdf/1708.06426.pdf
+        # TODO: rewrite to operate on decoder hidden states and lm hidden states 
+        elif self.join_method == "deep":
+            lm_dim = self.language_model.lang_model.config.n_embd
+            s2s_dim = self.options['emb_dim'] if self.options['decoder'] == 'transformer' else self.options['tgt_hidden_dim']
             self.lm_sigmoid = nn.Sigmoid()
-        elif self.join_method != 'post-norm':
-            raise Exception("join method must be 'gate', 'add', or 'post-norm'")
+            self.lm_relu = nn.ReLU()
+            self.lm_linear_0 = nn.Linear(lm_dim, lm_dim)
+            self.lm_linear_1 = nn.Linear(lm_dim + s2s_dim, self.tgt_vocab_size)
+            self.init_fusion_weights()
+        elif self.join_method == 'cold':
+            lm_dim = self.language_model.lang_model.config.n_embd
+            s2s_dim = self.options['emb_dim'] if self.options['decoder'] == 'transformer' else self.options['tgt_hidden_dim']
+            self.lm_sigmoid = nn.Sigmoid()
+            self.lm_relu = nn.ReLU()
+            self.lm_linear_0 = nn.Linear(self.tgt_vocab_size, lm_dim)
+            self.lm_linear_1 = nn.Linear(lm_dim + s2s_dim, lm_dim)
+            self.lm_linear_2 = nn.Linear(lm_dim + s2s_dim, self.tgt_vocab_size)
+            self.init_fusion_weights()
+        else:
+            raise NotImplementedError('join method must be "shallow", "deep" or "cold"')
 
     def forward(self, input_src, input_tgt, srcmask, srclens, input_attr, attrlens, attrmask, tgtmask):
 
         # generate predictions from language model
-        lm_logit = self.language_model.forward(input_tgt, attention_mask = ~tgtmask)
+        lm_logit, lm_hidden_states = self.language_model.forward(input_tgt, attention_mask = ~tgtmask)
 
         # generate s2s logits
         s2s_logit, _, decoder_states = super(FusedSeqModel, self).forward(input_src,
@@ -366,21 +417,41 @@ class FusedSeqModel(SeqModel):
             tgtmask
         )
 
-        # add or multiply projected logits
-        if self.join_method == "add":
+        # combine lm logits and s2s logits according to fusion strategy
+        if self.join_method == "shallow":
             combined = s2s_logit.add(lm_logit * self.multp.expand_as(lm_logit))
             probs = self.softmax(combined)
-        elif self.join_method == 'gate':
-            combined = s2s_logit * self.lm_sigmoid(lm_logit)
+        elif self.join_method == 'deep':
+            out = self.lm_linear_0(lm_hidden_states[-1])
+            concat = torch.cat((decoder_states, self.lm_sigmoid(out)), 2)
+            out = self.lm_linear_1(concat)
+            combined = self.lm_relu(out)
             probs = self.softmax(combined)
-        elif self.join_method == 'post-norm':
-            combined = self.softmax(s2s_logit) * self.softmax(lm_logit)
+        else:
+            out = self.lm_linear_0(lm_logit)
+            concat = torch.cat((decoder_states, out), 2)
+            out2 = self.lm_linear_1(concat)
+            gated = self.lm_sigmoid(out2)
+            hadamard = gated * out
+            concat = torch.cat((decoder_states, hadamard), 2)
+            out = self.lm_linear_2(concat)
+            combined = self.lm_relu(out)
             probs = self.softmax(combined)
 
-        return combined, probs, decoder_states # in post-norm combined is no longer logits
+        return combined, probs, decoder_states
 
     def count_params(self):
         return super(FusedSeqModel, self).count_params()
+
+    def init_fusion_weights(self):
+        """Initialize fusion weights.""" 
+        for name, p in self.named_parameters():
+            if name == 'lm_linear_0.weight' or name == 'lm_linear_1.weight':
+                nn.init.xavier_uniform_(p)
+            if self.join_method == 'cold':
+                if name == 'lm_linear_2.weight':
+                    nn.init.xavier_uniform_(p)
+
 
 
         
