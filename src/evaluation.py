@@ -681,7 +681,7 @@ def decode_top_k(
         next_preds = torch.LongTensor(sampled_indices)
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
         next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] for cur, prev in zip(sampled_indices, prev_mask)]
-       next_mask_unrolled = [val for val_list in next_mask for val in val_list]
+        next_mask_unrolled = [val for val_list in next_mask for val in val_list]
         if CUDA:
             next_preds = next_preds.cuda()
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
