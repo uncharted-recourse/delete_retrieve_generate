@@ -16,10 +16,14 @@ import random
 import time
 from modules.expectedMultiBleu import bleu as expected_bleu
 from itertools import permutations
+import pickle
 
 import os
 import logging
 from utils.log_func import get_log_func
+from flask import Flask
+app = Flask(__name__)
+app.logger.debug('debug')
 
 log_level = os.getenv("LOG_LEVEL", "WARNING")
 root_logger = logging.getLogger()
@@ -72,19 +76,36 @@ def get_edit_distance(hypotheses, reference):
 
     return ed * 1.0 / len(hypotheses)
 
-def backpropagation_step(loss, optimizer, retain_graph = False):
-    """ perform one step of backpropagation"""
-    optimizer.zero_grad()
-    loss.backward(retain_graph = retain_graph)
-    optimizer.step()
+def update_training_index(cur_index, n_styles, batch_size):
+    """ returns the next idx and sample size given current index, number of styles supported in 
+        index region and batch size
+    """
+    train_sample_size = batch_size // n_styles
+    cur_index -= train_sample_size
+    if cur_index < 0:
+        train_sample_size += cur_index
+        cur_index = 0
+    return cur_index, train_sample_size
 
-def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
+def backpropagation_step(loss, optimizer, scheduler, scheduler_name, batch_idx, 
+        update_frequency = 1, retain_graph = False):
+    """ perform one step of backpropagation (supports accumulated gradients)"""
+    loss.backward(retain_graph = retain_graph)
+
+    if (batch_idx + 1) % update_frequency == 0:
+        # every update_frequency batches update accumulated gradients
+        optimizer.step()
+        optimizer.zero_grad()
+        if scheduler_name == 'cyclic' or scheduler_name == 'cosine':
+            scheduler.step()
+
+def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model, weight_decay = 0):
     """ define optimmizer and scheduler according to learning rate"""
 
     if optimizer_type == 'adam':
-        optimizer = optim.Adam(model.parameters(), lr=lr)
+        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     elif optimizer_type == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr=lr)
+        optimizer = optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay)
     else:
         raise NotImplementedError("Learning method not recommended for this task")
 
@@ -92,9 +113,15 @@ def define_optimizer_and_scheduler(lr, optimizer_type, scheduler_type, model):
     if scheduler_type == 'plateau':
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
     elif scheduler_type == 'cyclic':
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
-            base_lr = lr,  
-            max_lr = 10 * lr
+        scheduler = optim.lr_scheduler.CyclicLR(optimizer, 
+            base_lr = lr / 10,  
+            max_lr = lr,
+            cycle_momentum = False,
+            #step_size_up = 4000,
+        )
+    elif scheduler_type == 'cosine':
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer,
+            T_max = 10
         )
     else:
         raise NotImplementedError("Learning scheduler not recommended for this task")
@@ -147,7 +174,7 @@ def calculate_discriminator_loss(dataset, style_ids, n_styles, content_data, att
     input_ids_aux, _, auxlens, auxmask, _ = attr_data
     generated_decoder_states = generate_soft_sequence(
         max_length,
-        data.get_start_id(tokenizer), 
+        tokenizer.bos_token_id, 
         model, 
         content_data, # this could also be new_content (they are the same)
         new_attr,
@@ -164,10 +191,10 @@ def calculate_discriminator_loss(dataset, style_ids, n_styles, content_data, att
 
     # pass decoder states to discriminator module
     s_outputs = []
-    for i in range(len(s_discriminators)):
+    for i, style in enumerate(style_ids):
         decoder_states_sample = decoder_states_shuffled[i * sample_size:(i+1) * sample_size]
         gen_decoder_states_sample = generated_decoder_states[i * sample_size:(i+1) * sample_size]
-        s_outputs.append(s_discriminators[i].forward(torch.cat((decoder_states_sample, gen_decoder_states_sample), dim=0)))
+        s_outputs.append(s_discriminators[style].forward(torch.cat((decoder_states_sample, gen_decoder_states_sample), dim=0)))
     t2 = time.time()
     log(f'forward pass through discriminators took: {t2 - t1} seconds', level='debug')
 
@@ -203,8 +230,7 @@ def calculate_loss(dataset, style_ids, n_styles, config, batch_idx, sample_size,
     weight_mask = torch.ones(len(tokenizer))
     if CUDA:
         weight_mask = weight_mask.cuda()
-    padding_id = data.get_padding_id(tokenizer)
-    weight_mask[padding_id] = 0
+    weight_mask[tokenizer.pad_token_id] = 0
     
     # define loss criterion
     if loss_crit == 'cross_entropy':
@@ -305,21 +331,26 @@ def decode_minibatch_greedy(max_len, start_id, stop_id, model, src_input, srclen
     for i in range(max_len):
         # run input through the model
         decoder_logit, word_probs, decoder_states = model(src_input, tgt_input, 
-            srcmask, srclens, aux_input, auxmask, auxlens, tgt_mask)
+            srcmask, srclens, aux_input, auxlens, auxmask, tgt_mask)
         decoder_argmax = word_probs.data.cpu().numpy()[:,-1,:].argmax(axis=-1)
         
         # select the predicted "next" tokens, attach to target-side inputs
         next_preds = Variable(torch.from_numpy(decoder_argmax))
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
-        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] 
-            for cur, prev in zip(decoder_argmax, prev_mask)]
-        next_mask = Variable(torch.from_numpy(np.array(next_mask)))
+        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] for cur, prev in zip(decoder_argmax, prev_mask)]
+        next_mask_unrolled = [val for val_list in next_mask for val in val_list]
         if CUDA:
             next_preds = next_preds.cuda()
-            next_mask = next_mask.cuda()
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
-        tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
 
+        # check for early stopping to speed up decoding
+        if sum(next_mask_unrolled) == len(next_mask_unrolled):
+            return tgt_input
+        else:
+            next_mask = torch.BoolTensor(next_mask)
+            if CUDA:
+                next_mask = next_mask.cuda()
+            tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
     return tgt_input
 
 def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
@@ -327,18 +358,17 @@ def ids_to_toks(tok_seqs, tokenizer, sort = True, indices = None):
 
     # take off the gpu
     tok_seqs = tok_seqs.cpu().numpy()
+
     # convert to toks, delete any special tokens (bos, eos, pad)
-    start_id = data.get_start_id(tokenizer)
-    stop_id = data.get_stop_id(tokenizer)
-    tok_seqs = [line[1:] if line[0] == start_id else line for line in tok_seqs]
-    tok_seqs = [np.split(line, np.where(line == stop_id)[0])[0] for line in tok_seqs]
+    tok_seqs = [line[1:] if line[0] == tokenizer.bos_token_id else line for line in tok_seqs]
+    tok_seqs = [np.split(line, np.where(line == tokenizer.eos_token_id)[0])[0] for line in tok_seqs]
     tok_seqs = [tokenizer.decode(line) for line in tok_seqs]
-    
+
     # unsort
     if sort:
-         return data.unsort(tok_seqs, indices)
+        return data.unsort(tok_seqs, indices)
     else:
-         return tok_seqs
+        return tok_seqs
 
 def generate_sequences(tokenizer, model, config, start_id, stop_id, input_content, input_aux):
     "generate sequences of output by sampling from token distribution according to decoding strategy"
@@ -390,21 +420,25 @@ def generate_sequences(tokenizer, model, config, start_id, stop_id, input_conten
 def decode_dataset(model, test_data, sample_size, num_samples, config):
     """Evaluate model on num_samples of size sample_size"""
 
-    inputs = []
-    preds = []
-    auxs = []
-    ground_truths = []
-
     content_lengths = [len(datum['content']) for datum in test_data]
     style_ids = [i for i in range(len(content_lengths))]
     min_content_length = min(content_lengths)
     upper_lim = min(min_content_length, num_samples * sample_size)
+
+    # create list of lists to separate translations for each style
+    inputs = [[] for i in range(len(style_ids))]
+    preds = [[] for i in range(len(style_ids))]
+    auxs = [[] for i in range(len(style_ids))]
+    ground_truths = [[] for i in range(len(style_ids))]
+
     for j in range(0, upper_lim, sample_size):
-        sys.stdout.write("\r%s/%s..." % (j, upper_lim))
+        sys.stdout.write("\r%s/%s..." % (j * len(style_ids), upper_lim * len(style_ids)))
         sys.stdout.flush()
 
         # get batch
-        src_packed, auxs_packed, tgt_packed = data.minibatch(test_data, j, style_ids, len(content_lengths), 
+        if j + sample_size > min_content_length:
+            sample_size = min_content_length - j
+        src_packed, auxs_packed, tgt_packed = data.minibatch(test_data, style_ids, len(style_ids), j, 
             sample_size, config['data']['max_len'], config['model']['model_type'], is_test = True)
         _, output_lines_src, _, _, indices = src_packed
         input_ids_aux, _, _, _, _ = auxs_packed
@@ -416,56 +450,69 @@ def decode_dataset(model, test_data, sample_size, num_samples, config):
             tokenizer,
             model, 
             config,
-            data.get_start_id(tokenizer),
-            data.get_stop_id(tokenizer),
+            tokenizer.bos_token_id,
+            tokenizer.eos_token_id,
             src_packed,
             auxs_packed,
         )
-
         # convert inputs/preds/targets/aux to human-readable form
-        inputs += ids_to_toks(output_lines_src, tokenizer, indices=indices)
-        preds += ids_to_toks(tgt_pred, tokenizer, indices=indices)
-        ground_truths += ids_to_toks(output_lines_tgt, tokenizer, indices=indices)
-        
-        if config['model']['model_type'] == 'delete':
-            auxs += [[str(x)] for x in input_ids_aux.data.cpu().numpy()] # because of list comp in inference_metrics()
-        elif config['model']['model_type'] == 'delete_retrieve':
-            auxs += ids_to_toks(input_ids_aux, tokenizer, indices = indices)
-        elif config['model']['model_type'] == 'seq2seq':
-            auxs += ['None' for _ in range(len(tgt_pred))]
-
+        for i in range(len(test_data)):
+            inputs[i] += ids_to_toks(output_lines_src[i*sample_size:(i+1)*sample_size], tokenizer, sort = False)
+            preds[i] += ids_to_toks(tgt_pred[i*sample_size:(i+1)*sample_size], tokenizer, sort = False)
+            ground_truths[i] += ids_to_toks(output_lines_tgt[i*sample_size:(i+1)*sample_size], tokenizer, sort = False)
+    
+            if config['model']['model_type'] == 'delete':
+                auxs[i] += [[str(x[0])] for x in input_ids_aux[i*sample_size:(i+1)*sample_size].data.cpu().numpy()] # because of list comp in inference_metrics()
+            elif config['model']['model_type'] == 'delete_retrieve':
+                auxs[i] += ids_to_toks(input_ids_aux[i*sample_size:(i+1)*sample_size].squeeze(-1), tokenizer, sort = False)
+            elif config['model']['model_type'] == 'seq2seq':
+                auxs[i] += ['None' for _ in range(sample_size)]
     return inputs, preds, ground_truths, auxs
 
 
-def inference_metrics(model, test_data, sample_size, num_samples, config):
+def inference_metrics(model, s_discriminators, test_data, sample_size, num_samples, config):
     """ decode and evaluate bleu """
     inputs, preds, ground_truths, auxs = decode_dataset(
         model, test_data, sample_size, num_samples, config)
-    bleu = get_bleu(preds, ground_truths)
-    edit_distance = get_edit_distance(preds, ground_truths)
+    bleus = [get_bleu(p, truth) for p, truth in zip(preds, ground_truths)]
+    edit_distances = [get_edit_distance(p, truth) for p, truth in zip(preds, ground_truths)]
 
-    inputs = [''.join(seq) for seq in inputs]
-    preds = [''.join(seq) for seq in preds]
-    ground_truths = [''.join(seq) for seq in ground_truths]
-    auxs = [''.join(seq) for seq in auxs]
+    inputs = [''.join(seq) for ins in inputs for seq in ins]
+    preds = [''.join(seq) for p in preds for seq in p]
+    ground_truths = [''.join(seq) for g in ground_truths for seq in g]
+    auxs = [''.join(seq) for a in auxs for seq in a]
 
-    return bleu, edit_distance, inputs, preds, ground_truths, auxs
+    # put models back in train mode
+    model.train()
+    if s_discriminators is not None:
+        [discriminator.train() for discriminator in s_discriminators]
 
+    return bleus, edit_distances, inputs, preds, ground_truths, auxs
 
 def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
     """ evaluate log perplexity WITHOUT decoding
         (i.e., with teacher forcing)
     """
+
+    # put models in eval mode
+    model.eval()
+    if s_discriminators is not None:
+        [discriminator.eval() for discriminator in s_discriminators]
+
     losses = []
     d_losses = [[]]
     content_lengths = [len(datum['content']) for datum in test_data]
     style_ids = [i for i in range(len(content_lengths))]
+    
+    # round down from sample size
     min_content_length = min(content_lengths)
     for j in range(0, min_content_length, sample_size):
         sys.stdout.write("\r%s/%s..." % (j, min_content_length))
         sys.stdout.flush()
 
         loss_crit = config['training']['loss_criterion']
+        if j + sample_size > min_content_length:
+            sample_size = min_content_length - j
         combined_loss, s_losses = calculate_loss(test_data, style_ids, len(content_lengths), config, j, sample_size, config['data']['max_len'], 
             config['model']['model_type'], model, s_discriminators, loss_crit=loss_crit, bt_ratio=config['training']['bt_ratio'], is_test=True)
 
@@ -479,111 +526,85 @@ def evaluate_lpp(model, s_discriminators, test_data, sample_size, config):
             d_means = None
     return np.mean(losses), d_means
 
-def predict_text(text, model, src, tgt, config, cache_dir = None, forward = True, remove_attributes = True):
+def predict_text(input_content, tokenizer, style_ids, config, model, k = 5, temperature = 1.0, 
+        number_preds = 1, train_data = None):
     """ translate input sequence (not in train / test corpora) to another style (s). 
-        we don't apply noising strategy to this input (should we??)
+        train_data only necessary in delete and retrieve framework to create tfidf similarity
+        between input_text and training corpii to extract appropriate attributes for embedding. 
     """
+
     start_time = time.time()
 
-    # tokenize input data using cached tokenizer and attribute vocab
-    tokenized_text, tokenizer = data.encode_text_data([text],
-        encoder = config['data']['tokenizer'], 
-        cache_dir=cache_dir
-    )
-    if forward:
-        attr_path = os.path.join(cache_dir, 'pre_attribute_vocab.pkl')
-    else:
-        attr_path = os.path.join(cache_dir, 'post_attribute_vocab.pkl')
-    attr = pickle.load(open(attr_path, "rb"))
+    # remove attribute tokens from input according if they have been marked
+    # (if word / ngram attributes pre-calculated they need to be cached and copied to image)
+    input_content = input_content.split()
+    if config['data']['noise'] == 'word_attributes' or config['data']['noise'] == 'ngram_attributes':
+        attr_path = os.path.join("checkpoints", config['data']['vocab_dir'], 'style_vocabs.pkl')
+        attrs = pickle.load(open(attr_path, "rb"))
 
-    if remove_attributes:
-        src_lines, src_content, src_attribute = list(zip(
-            *[data.extract_attributes(line, attr, config['data']['noise'], config['data']['dropout_prob'],
-                config['data']['ngram_range'], config['data']['permutation']) for line in tokenized_text]
-        ))
+        # remove attributes from all styles
+        all_attrs = [attr for attr_list in attrs for attr in attr_list]
+        # permutation and dropout_prob should also be turned off for deployment inference
+        _, input_content, _ = data.extract_attributes(input_content, all_attrs, config['data']['noise'], 
+            0, config['data']['ngram_range'], 0)
     
-    # convert content to tokens
-    max_len = config['data']['max_len']
-    start_id = data.get_start_id(tokenizer)
-    stop_id = data.get_stop_id(tokenizer)
-    lines = [[start_id] + l[:max_len] + [stop_id] for l in input_data]
-    content_length = [len(l) - 1 for l in lines]
-    content_mask = [([1] * l) for l in content_length]
-    content = [[int(w) for w in l[:-1]] for l in lines]
+    if config['model']['model_type'] == 'delete_retrieve':
+        # get attribute examples by measuring distance to train_data corpii with tfidf
+        train_data = [train_data[style_id] for style_id in style_ids]
+        dist_measurers = [data.CorpusSearcher(
+            query_corpus=[' '.join(x) for x in input_content],
+            key_corpus=[' '.join(x) for x in train_dict['content']],
+            value_corpus=[' '.join(x) for x in train_dict['attribute']],
+            vectorizer=data.TfidfVectorizer(),
+            make_binary=False)
+            for train_dict in train_data]
 
-    # convert attributes to tokens or binary variables
-    attributes_len = None
-    attributes_mask = None
-    if config['model']['model_type'] == 'delete':
-        if forward:
-            attributes = [1]
-        else:
-            attributes = [0]
-    elif config['model']['model_type'] == 'delete_retrieve':
-        if forward:
-            attributes = data.sample_replace(lines, tgt['dist_measurer'], 1.0, 0)
-        else:
-            attributes = data.sample_replace(lines, src['dist_measurer'], 1.0, 0)
-        attributes = [[int(w) for w in l[:-1]] for l in attributes]
-        attributes_len = [len(l) - 1 for l in attributes]
-        attributes_mask = [([1] * l) for l in attributes_len]
-        attributes_mask = Variable(torch.LongTensor(attributes_mask))
+        # last two args are sample rate (always 1.0) and key_idx (always 0)
+        input_attributes = [data.sample_replace([input_content], tokenizer, [dist_m], 1.0, 0) for dist_m in dist_measurers]
+
+        # tokenize attributes
+        input_attr = torch.LongTensor([
+            [tokenizer.bos_token_id] + 
+            tokenizer.encode(" ".join(attr))[:config['data']['max_len'] - 2]
+            for attr in input_attributes])
+        attr_length = [max([attr.shape[1] for attr in input_attr])]
+        attr_mask = torch.BoolTensor([([False] * attr_length)])
+
     else:
-        raise Exception('Currently only "delete" and "delete_retrieve" models are supported for predict_text()')
-    log(f'time for tokenization: {time.time() - start_time}', level='debug')
-    
-    # convert to torch objects for prediction
-    content = Variable(torch.LongTensor(content))
-    content_mask = Variable(torch.FloatTensor(content_mask))
-    attributes = Variable(torch.LongTensor(attributes))
+        input_attributes = torch.LongTensor([style_ids])
+        attr_length = None
+        attr_mask = None
 
-    if CUDA:
-        content = content.cuda()
-        content_mask = content_mask.cuda()
-        attributes = attributes.cuda()
-        attributes_mask = attributes_mask.cuda()
+    # tokenize content 
+    input_content = torch.LongTensor([
+        [tokenizer.bos_token_id] + 
+        tokenizer.encode(" ".join(input_content))[:config['data']['max_len'] - 2]])
+    content_length = [input_content.shape[1]]
+    content_mask = torch.BoolTensor([([False] * content_length[0])])
 
-    # make predictions
-    model.eval()
-    if config['model']['decode'] == 'greedy':
-        tgt_pred = decode_minibatch_greedy(
-            max_len, start_id, 
-            model, content, content_length, content_mask,
-            attributes, attributes_len, attributes_mask
-        )
-    elif config['model']['decode'] == 'beam_search':
-        start_time = time.time()
-        if config['model']['model_type'] == 'delete_retrieve':
-            tgt_pred = torch.stack([beam_search_decode(
-                config['data']['max_len'], start_id, stop_id, model, 
-                i, [i_l], i_m, a, [a_l], a_m,
-                data.get_padding_id(tokenizer), config['model']['beam_width']) for 
-                i, i_l, i_m, a, a_l, a_m in zip(input_lines_src, srclens, srcmask,
-                input_ids_aux, auxlens, auxmask)])
-        elif config['model']['model_type'] == 'delete':
-            input_ids_aux = input_ids_aux.unsqueeze(1)
-            tgt_pred = torch.stack([beam_search_decode(
-                config['data']['max_len'], start_id, stop_id, model, 
-                i, [i_l], i_m, a, None, None,
-                data.get_padding_id(tokenizer), config['model']['beam_width']) for 
-                i, i_l, i_m, a in zip(input_lines_src, srclens, srcmask,
-                input_ids_aux)])
-        log(f'beam search decoding took: {time.time() - start_time}', level='debug')
-    elif config['model']['decode'] == 'top_k':
-        start_time = time.time()
-        tgt_pred = decode_top_k(
-            max_len, start_id, stop_id,
-            model, content, content_length, content_mask,
-            attributes, attributes_len, attributes_mask, 
-            config['model']['k'], config['model']['temperature']
-        )
-        log(f'top k decoding took: {time.time() - start_time}', level='debug')
-    log(f'time for predictions: {time.time() - start_time}', level='debug')
+    # copy # of predictions times for batch decoding
+    input_attributes = input_attributes.repeat(number_preds, 1)
+    input_content = input_content.repeat(number_preds, 1)
+    content_mask = content_mask.repeat(number_preds, 1)
+    content_length = content_length * number_preds
+    if attr_length is not None:
+        attr_mask = attr_mask.repeat(number_preds, 1)
+        attr_length = attr_length * number_preds
+
+    # decode according to decoding strategy
+    content = (input_content, None, content_length, content_mask, None)
+    attributes = (input_attributes, None, attr_length, attr_mask, None)
+    t0 = time.time()
+
+    # update k and temperature with user inputs, generate sequence
+    config['model']['k'] = k
+    config['model']['temperature'] = temperature
+    output = generate_sequences(tokenizer, model, config, tokenizer.bos_token_id, tokenizer.eos_token_id, content, attributes)
 
     # convert tokens to text
-    preds = []
-    preds += ids_to_toks(tgt_pred, tokenizer, sort=False)
-    return ' '.join(preds[0])
+    preds = ids_to_toks(output, tokenizer, sort=False)
+    log(preds, level='debug')
+    return preds
 
 def sample_softmax(logits, temperature=1.0, num_samples=1):
     """ sample from softmax distribution over tokens with temperature"""
@@ -644,7 +665,7 @@ def decode_top_k(
     for i in range(max_len):
         # run input through the model
         decoder_logits, _, decoder_states = model(src_input, tgt_input, srcmask, srclens,
-            aux_input, auxmask, auxlens, tgt_mask)
+            aux_input, auxlens, auxmask, tgt_mask)
         decoder_logits = decoder_logits.data.cpu().numpy()[:,-1,:]
 
         # if k=1, do greedy sampling
@@ -657,19 +678,26 @@ def decode_top_k(
             top_scores = [x[idx] for x, idx in zip(decoder_logits, top_ids)]
             inds = [sample_softmax(top, temperature=temperature) for top in top_scores]
             sampled_indices = np.array([x[idx] for x,idx in zip(top_ids, inds)])
-        next_preds = Variable(torch.from_numpy(sampled_indices))
+        next_preds = torch.LongTensor(sampled_indices)
         prev_mask = tgt_mask.data.cpu().numpy()[:,-1]
-        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] 
-            for cur, prev in zip(sampled_indices, prev_mask)]
-        next_mask = Variable(torch.from_numpy(np.array(next_mask)))
+        next_mask = [[True] if cur == [stop_id] or prev == [True] else [False] for cur, prev in zip(sampled_indices, prev_mask)]
+       next_mask_unrolled = [val for val_list in next_mask for val in val_list]
         if CUDA:
             next_preds = next_preds.cuda()
-            next_mask = next_mask.cuda()
         tgt_input = torch.cat((tgt_input, next_preds.unsqueeze(1)), dim=1)
-        tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
 
+        # check for early stopping to speed up decoding
+        if sum(next_mask_unrolled) == len(next_mask_unrolled):
+            return tgt_input
+        else:
+            next_mask = torch.BoolTensor(next_mask)
+            if CUDA:
+                next_mask = next_mask.cuda()
+            tgt_mask = torch.cat((tgt_mask, next_mask), dim=1)
     return tgt_input
 
+    
+    
 class Beam(object):
     """ Beam object for beam search decoding"""
 
@@ -732,7 +760,7 @@ def beam_search_decode(
             else:
                 # run input through the model
                 decoder_logits = get_next_token_scores(model, src_input, prefix, srcmask, srclens,
-                    aux_input, auxmask, auxlens)
+                    aux_input, auxlens, auxmask)
                 for next_id, next_score in enumerate(decoder_logits):
                     score = prefix_score + next_score
                     next_pred = Variable(torch.from_numpy(np.array([[next_id]])))

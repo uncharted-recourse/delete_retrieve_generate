@@ -1,15 +1,17 @@
 # What should we not copy in to the container?
 
 # mount volumes for data storage instead
-checkpoints/
+!checkpoints/
 other_data/
-!data/
+data/
 compare_preds.py
 tools/
 testing/
 pytorch/
 
 scripts/__pycache__
+modules/__pycache__
+utils/__pycache__
 __pycache__/
 .nv/
 .dvc/
@@ -23,6 +25,7 @@ __pycache__/
 .pytest_cache/
 .ipython/
 .ipynb_checkpoints/
+.bash_history
 
 # npm
 node_modules

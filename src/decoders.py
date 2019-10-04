@@ -1,10 +1,13 @@
 import math
 import numpy as np
-
+import copy
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.autograd import Variable
 from src.cuda import CUDA
+from transformers.modeling_transfo_xl import PositionalEmbedding
+from src.encoders import MaskedRelPartialLearnableMultiHeadAttn
 
 class BilinearAttention(nn.Module):
     """ bilinear attention layer: score(H_j, q) = H_j^T W_a q
@@ -97,7 +100,6 @@ class StackedAttentionLSTM(nn.Module):
         super(StackedAttentionLSTM, self).__init__()
         self.options=config['model']
 
-
         self.dropout = nn.Dropout(self.options['dropout'])
 
         self.layers = []
@@ -128,49 +130,113 @@ class StackedAttentionLSTM(nn.Module):
 
         return input, (h_final, c_final)
 
-class TransformerDecoder(nn.Module):
-    r""" simple wrapper for a pytorch transformer encoder """
-    def __init__(self, emb_dim, n_head = 8, dim_ff = 1024, dropout = 0.1, num_layers = 4):
-        r""" Decoder is a stack of N decoder layers"""
-        super(TransformerDecoder, self).__init__()
+class TransformerXLDecoderLayer(nn.TransformerDecoderLayer):
+    r"""subclass of TransformerDecoderLayer 
+        (https://pytorch.org/docs/stable/_modules/torch/nn/modules/transformer.html)
+        that optionally replaces MultiheadAttention with Relative MultiheadAttention.
 
-        self.emb_dim = emb_dim
-        self.decoder_layer = nn.TransformerDecoderLayer(
-            self.emb_dim, 
-            n_head, 
-            dim_feedforward = dim_ff, 
-            dropout = dropout
-        )
-        self.transformer_decoder = nn.TransformerDecoder(
-            self.decoder_layer, 
-            num_layers,
-            norm = nn.LayerNorm(emb_dim)
-        )
+    Args:
+        d_model: the number of expected features in the input (required).
+        nhead: the number of heads in the multiheadattention models (required).
+        dim_feedforward: the dimension of the feedforward network model (default=2048).
+        dropout: the dropout value (default=0.1).
 
-    def forward(self, tgt_embedding, encoder_output, tgtmask, srcmask):
-        r""" Pass the inputs (and masks) through each decoder layer in turn"""
-        # generate square padding masks so that only positions before i can influence attention op
-        src_position_mask = self.generate_square_subsequent_mask(encoder_output.size(1))
-        src_position_mask = src_position_mask[:tgt_embedding.size(1)]
-        tgt_position_mask = self.generate_square_subsequent_mask(tgt_embedding.size(1)) 
-        if CUDA:
-            src_position_mask = src_position_mask.cuda()
-            tgt_position_mask = tgt_position_mask.cuda()
+    """
 
-        return self.transformer_decoder.forward(
-            tgt_embedding.transpose(0,1), 
-            encoder_output.transpose(0,1), 
-            tgt_key_padding_mask = tgtmask, 
-            memory_key_padding_mask = srcmask,
-            tgt_mask = tgt_position_mask,
-            memory_mask = src_position_mask
-        ).transpose(0,1)
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
+        super(TransformerXLDecoderLayer, self).__init__(d_model, nhead, dim_feedforward = dim_feedforward, dropout = dropout)
 
-    def generate_square_subsequent_mask(self, sz):
-        r"""Generate a square mask for the sequence. The masked positions are filled with float('-inf').
-            Unmasked positions are filled with float(0.0). Copied from torch Transformer base class. 
+        self.self_attn = MaskedRelPartialLearnableMultiHeadAttn(nhead, d_model, d_model // nhead, 
+            dropout, dropatt = dropout)
+        self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.dropout1 = None
+        self.norm1 = None
+
+    def forward(self, tgt, memory, pos_emb, tgt_mask=None, memory_mask=None,
+                tgt_key_padding_mask=None, memory_key_padding_mask=None):
+        r"""Pass the inputs (and mask) through the decoder layer.
+
+        Args:
+            tgt: the sequence to the decoder layer (required).
+            memory: the sequnce from the last layer of the encoder (required).
+            tgt_mask: the mask for the tgt sequence (optional).
+            memory_mask: the mask for the memory sequence (optional).
+            tgt_key_padding_mask: the mask for the tgt keys per batch (optional).
+            memory_key_padding_mask: the mask for the memory keys per batch (optional).
+
+        Shape:
+            see the docs in Transformer class.
         """
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
 
+        tgt = self.self_attn(tgt, pos_emb, attn_mask = tgt_mask, key_mask = tgt_key_padding_mask)[0]
+        tgt2 = self.multihead_attn(tgt, memory, memory, attn_mask=memory_mask, key_padding_mask=memory_key_padding_mask)[0]
+        tgt = tgt + self.dropout2(tgt2)
+        tgt = self.norm2(tgt)
+        tgt2 = self.linear2(self.dropout(F.relu(self.linear1(tgt))))
+        tgt = tgt + self.dropout3(tgt2)
+        tgt = self.norm3(tgt)
+        return tgt
+
+class TransformerXLDecoder(nn.Module):
+    r"""TransformerXLDecoder is a stack of N TransformerXLDecoder layers
+
+    Args:
+        encoder_layer: an instance of the TransformerXLDecoderLayer() class (required).
+        num_layers: the number of sub-encoder-layers in the encoder (required).
+        norm: the layer normalization component (optional).
+    """
+
+    def __init__(self, d_model, num_layers, nhead = 8, dim_ff = 2048, dropout = 0.1, clamp_len = 50):
+
+        super(TransformerXLDecoder, self).__init__()
+        self.clamp_len = clamp_len
+        self.pos_emb = PositionalEmbedding(d_model)
+        self.drop = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(d_model)
+        layer = TransformerXLDecoderLayer(d_model, nhead, dim_feedforward=dim_ff)
+        self.layers = nn.ModuleList([copy.deepcopy(layer) for i in range(num_layers)])
+        self.num_layers = num_layers
+
+        # initialize weights
+        self._reset_parameters()
+
+    def forward(self, tgt, memory, tgt_key_padding_mask=None, memory_key_padding_mask=None):
+        r"""Pass the input through the TransformerXLDecoder layers in turn.
+
+        Args:
+            tgt: the sequence to the decoder layer (required).
+            memory: the sequnce from the last layer of the encoder (required).
+            tgt_key_padding_mask: the mask for the tgt keys per batch (optional).
+            memory_key_padding_mask: the mask for the memory keys per batch (optional).
+
+        """
+        tgt, memory = tgt.transpose(0,1), memory.transpose(0,1)
+        qlen = tgt.shape[0]
+        tgt_key_padding_mask = tgt_key_padding_mask.transpose(0,1)
+
+        pos_seq = torch.arange(qlen-1, -1, -1.0, device=tgt.device, dtype=tgt.dtype)
+        if self.clamp_len > 0:
+            pos_seq.clamp_(max=self.clamp_len)
+        pos_emb = self.pos_emb(pos_seq)
+        output = self.drop(tgt)
+        pos_emb = self.drop(pos_emb)
+
+        attn_mask = torch.triu(torch.ones((qlen, qlen), dtype=torch.uint8), diagonal=1)[:,:,None]
+        if CUDA:
+            attn_mask = attn_mask.cuda()
+
+        for i in range(self.num_layers):
+            output = self.layers[i](output, memory, pos_emb, tgt_mask=attn_mask,
+                                    tgt_key_padding_mask=tgt_key_padding_mask,
+                                    memory_key_padding_mask = memory_key_padding_mask)
+
+        output = self.norm(output)
+
+        return output.transpose(0,1)
+
+    def _reset_parameters(self):
+        r"""Initiate parameters in the transformer model."""
+
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
